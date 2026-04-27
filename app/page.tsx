@@ -391,56 +391,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* Telemetry Card */}
-          <div className="flex flex-col rounded-md border bg-muted/20 overflow-hidden">
-            <div className="p-4 grid grid-cols-3 gap-4 text-center">
-              <div className="flex flex-col">
-                <span className="text-xs text-muted-foreground uppercase font-semibold h-8 flex flex-col items-center justify-end pb-1 gap-0.5">
-                  <span>Power</span>
-                  {activeTrainerMode.type === "erg" && (
-                    <span className="text-[10px] text-primary normal-case font-medium leading-none">
-                      Target: {activeTrainerMode.watts}W
-                    </span>
-                  )}
-                </span>
-                <span className="text-2xl font-mono">{power ?? "-"} <span className="text-sm">W</span></span>
-              </div>
-              <div className="flex flex-col">
-                <span className="text-xs text-muted-foreground uppercase font-semibold h-8 flex flex-col items-center justify-end pb-1">
-                  Cadence
-                </span>
-                <span className="text-2xl font-mono">{cadence ?? "-"} <span className="text-sm">rpm</span></span>
-              </div>
-              <div className="flex flex-col">
-                <span className="text-xs text-muted-foreground uppercase font-semibold h-8 flex flex-col items-center justify-end pb-1 gap-0.5">
-                  <span>HR</span>
-                  {currentHrZone && (
-                    <span 
-                      className="text-[10px] normal-case font-medium leading-none"
-                      style={{ color: currentHrZone.color }}
-                    >
-                      {currentHrZone.name.split(" ")[0]} ({currentHrZone.minBpm}-{currentHrZone.maxBpm})
-                    </span>
-                  )}
-                </span>
-                <span 
-                  className="text-2xl font-mono"
-                  style={{ color: currentHrZone?.color }}
-                >
-                  {heartRate ?? "-"} <span className="text-sm opacity-75">bpm</span>
-                </span>
-              </div>
-            </div>
-            <div className="px-4 py-2 bg-muted/40 border-t flex justify-between items-center">
-              <span className="text-xs text-muted-foreground uppercase font-semibold">Active Mode</span>
-              <span className="text-sm font-medium">
-                {activeTrainerMode.type === "none" && <span className="text-muted-foreground">None</span>}
-                {activeTrainerMode.type === "erg" && <span className="text-primary">ERG ({activeTrainerMode.watts} W)</span>}
-                {activeTrainerMode.type === "resistance" && <span className="text-primary">Resistance ({activeTrainerMode.level}%)</span>}
-              </span>
-            </div>
-          </div>
-
           <div className="flex flex-col gap-4 p-4 rounded-md border">
             {/* Mode Switcher */}
             <div className="flex p-1 bg-muted/50 rounded-md">
@@ -617,6 +567,11 @@ export default function App() {
            disabled={connectionState !== "connected"} 
            onPowerTargetChange={applyTargetPower} 
            onStopSession={handleStopSession}
+           power={power}
+           cadence={cadence}
+           heartRate={heartRate}
+           currentHrZone={currentHrZone}
+           activeTrainerMode={activeTrainerMode}
         />
       </div>
     </main>
