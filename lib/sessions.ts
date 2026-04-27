@@ -1,0 +1,95 @@
+import { BikeSample } from "./kickr-client";
+
+export type SessionMetrics = {
+  tss: number;
+  iff: number;
+  durationSeconds: number;
+  avgPower?: number;
+  avgHr?: number;
+  avgCadence?: number;
+};
+
+export type RideSession = {
+  id: string;
+  workoutName: string;
+  timestamp: number;
+  samples: BikeSample[];
+  metrics: SessionMetrics;
+};
+
+export function saveRideSession(session: RideSession) {
+  if (typeof window === "undefined") return;
+  const sessions = getSavedRideSessions();
+  sessions.unshift(session); // Newest first
+  localStorage.setItem("ride_history", JSON.stringify(sessions));
+}
+
+export function getSavedRideSessions(): RideSession[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const data = localStorage.getItem("ride_history");
+    return data ? JSON.parse(data) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+export function deleteRideSession(id: string) {
+  if (typeof window === "undefined") return;
+  const sessions = getSavedRideSessions();
+  const filtered = sessions.filter(s => s.id !== id);
+  localStorage.setItem("ride_history", JSON.stringify(filtered));
+}
+
+export function calculateActualMetrics(samples: BikeSample[], ftp: number): SessionMetrics {
+  if (samples.length === 0) return { tss: 0, iff: 0, durationSeconds: 0 };
+  
+  const durationSeconds = samples.length; // Assuming roughly 1 sample per second
+  let powerSum = 0;
+  let hrSum = 0;
+  let cadenceSum = 0;
+  let powerCount = 0;
+  let hrCount = 0;
+  let cadenceCount = 0;
+
+  for (const s of samples) {
+    if (s.powerW !== undefined) {
+      powerSum += s.powerW;
+      powerCount++;
+    }
+    if (s.heartRateBpm !== undefined) {
+      hrSum += s.heartRateBpm;
+      hrCount++;
+    }
+    if (s.cadenceRpm !== undefined) {
+      cadenceSum += s.cadenceRpm;
+      cadenceCount++;
+    }
+  }
+
+  // NP Calculation
+  let rollingSum4 = 0;
+  let count = 0;
+  for (let i = 29; i < samples.length; i++) {
+    let sum30 = 0;
+    for (let j = 0; j < 30; j++) {
+      sum30 += samples[i - j].powerW || 0;
+    }
+    const avg30 = sum30 / 30;
+    rollingSum4 += Math.pow(avg30, 4);
+    count++;
+  }
+  
+  const np = count > 0 ? Math.pow(rollingSum4 / count, 0.25) : (powerSum / (powerCount || 1));
+  const iff = ftp > 0 ? np / ftp : 0;
+  const tss = ftp > 0 ? (durationSeconds * np * iff) / (ftp * 36) : 0;
+
+  return {
+    tss,
+    iff,
+    durationSeconds,
+    avgPower: powerCount > 0 ? Math.round(powerSum / powerCount) : undefined,
+    avgHr: hrCount > 0 ? Math.round(hrSum / hrCount) : undefined,
+    avgCadence: cadenceCount > 0 ? Math.round(cadenceSum / cadenceCount) : undefined
+  };
+}

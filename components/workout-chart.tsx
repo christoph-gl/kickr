@@ -14,11 +14,13 @@ function getColorForPower(power: number) {
 export function WorkoutChart({ 
   workout, 
   progressSeconds,
-  onSeek
+  onSeek,
+  preview = false
 }: { 
   workout: Workout; 
   progressSeconds: number;
   onSeek?: (seconds: number) => void;
+  preview?: boolean;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [hoverTime, setHoverTime] = useState<number | null>(null);
@@ -30,11 +32,11 @@ export function WorkoutChart({
     RIDER_PROFILE.fourDP.ac * 1.1
   );
   
-  const height = 300;
+  const height = preview ? 100 : 300;
   const ftpY = height - (RIDER_PROFILE.fourDP.ftp / maxPower) * height;
 
   const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
-    if (!svgRef.current) return;
+    if (preview || !svgRef.current) return;
     const rect = svgRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const percent = Math.max(0, Math.min(1, x / rect.width));
@@ -46,7 +48,7 @@ export function WorkoutChart({
   };
 
   const handleClick = (e: React.MouseEvent<SVGSVGElement>) => {
-    if (!svgRef.current || !onSeek) return;
+    if (preview || !svgRef.current || !onSeek) return;
     const rect = svgRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const percent = Math.max(0, Math.min(1, x / rect.width));
@@ -69,6 +71,42 @@ export function WorkoutChart({
   }
 
   let currentX = 0;
+
+  if (preview) {
+    return (
+      <div className="w-full h-12 relative bg-[#1a1a1a] rounded overflow-hidden">
+        <svg className="w-full h-full" preserveAspectRatio="none" viewBox={`0 0 100 ${height}`}>
+           <line 
+            x1="0" 
+            y1={ftpY} 
+            x2="100" 
+            y2={ftpY} 
+            stroke="white" 
+            strokeWidth="1" 
+            strokeOpacity="0.3" 
+          />
+          {workout.blocks.map((block, i) => {
+            const blockWidth = (block.durationSeconds / totalDuration) * 100;
+            const blockHeight = (block.targetPower / maxPower) * height;
+            const y = height - blockHeight;
+            const color = getColorForPower(block.targetPower);
+            const rect = (
+              <rect
+                key={i}
+                x={currentX}
+                y={y}
+                width={blockWidth}
+                height={blockHeight}
+                fill={color}
+              />
+            );
+            currentX += blockWidth;
+            return rect;
+          })}
+        </svg>
+      </div>
+    );
+  }
 
   return (
     <div className="w-full relative bg-[#202020] p-4 rounded-md border overflow-hidden">
@@ -196,14 +234,17 @@ export function WorkoutChart({
         {/* Hover Tooltip Overlay */}
         {hoverTime !== null && hoveredBlock && (
           <div 
-            className="absolute px-2 py-1 bg-black/90 border border-white/20 text-white text-xs font-bold rounded shadow-md pointer-events-none transform -translate-x-1/2 -translate-y-full transition-opacity opacity-0 group-hover:opacity-100"
+            className="absolute px-2 py-1 bg-black/90 border border-white/20 text-white text-[10px] font-bold rounded shadow-md pointer-events-none transform -translate-x-1/2 -translate-y-full transition-opacity opacity-0 group-hover:opacity-100 flex flex-col items-center"
             style={{ 
               left: `${(hoverTime / totalDuration) * 100}%`,
               // Position it slightly above the hovered block's top edge
               top: `calc(${((height - (hoveredBlock.targetPower / maxPower) * height) / height) * 100}% - 10px)` 
             }}
           >
-            {hoveredBlock.targetPower} W
+            <span>{hoveredBlock.targetPower} W</span>
+            <span className="text-[9px] opacity-70 font-mono">
+              {Math.floor(hoveredBlock.durationSeconds / 60)}:{String(hoveredBlock.durationSeconds % 60).padStart(2, '0')}
+            </span>
           </div>
         )}
       </div>

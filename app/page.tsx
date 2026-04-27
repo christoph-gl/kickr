@@ -1,11 +1,18 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import { KickrCore2Client } from "@/lib/kickr-client";
 import { HeartRateClient } from "@/lib/hr-client";
 import { Button } from "@/components/ui/button";
 import { RIDER_PROFILE } from "@/lib/profile";
 import { WorkoutPlayer } from "@/components/workout-player";
+import { 
+  RideSession, 
+  saveRideSession, 
+  getSavedRideSessions, 
+  deleteRideSession, 
+  calculateActualMetrics 
+} from "@/lib/sessions";
 import {
   Dialog,
   DialogContent,
@@ -37,6 +44,12 @@ export default function App() {
   
   // What the trainer is currently running
   const [activeTrainerMode, setActiveTrainerMode] = useState<ActiveTrainerMode>({ type: "none" });
+
+  const [sessions, setSessions] = useState<RideSession[]>([]);
+
+  useEffect(() => {
+    setSessions(getSavedRideSessions());
+  }, []);
 
   const currentHrZone = heartRate 
     ? RIDER_PROFILE.hrZones.find(z => heartRate >= z.minBpm && heartRate <= z.maxBpm) 
@@ -120,15 +133,72 @@ export default function App() {
     }
   }
   
-  async function applyTargetPower() {
+  async function applyTargetPower(watts?: number) {
+    const powerToSet = typeof watts === "number" ? watts : targetPower;
     try {
-      await clientRef.current.setTargetPower(targetPower);
-      setActiveTrainerMode({ type: "erg", watts: targetPower });
+      await clientRef.current.setTargetPower(powerToSet);
+      setActiveTrainerMode({ type: "erg", watts: powerToSet });
+      if (typeof watts === "number") {
+        setTargetPower(watts);
+      }
     } catch (e) {
       console.error(e);
       alert(e instanceof Error ? e.message : String(e));
     }
   }
+
+  const handleStopSession = (workoutName: string) => {
+    const samples = [...clientRef.current.samples];
+    if (samples.length === 0) return;
+
+    const metrics = calculateActualMetrics(samples, RIDER_PROFILE.fourDP.ftp);
+    const newSession: RideSession = {
+      id: "session-" + Date.now(),
+      workoutName,
+      timestamp: Date.now(),
+      samples,
+      metrics
+    };
+
+    saveRideSession(newSession);
+    setSessions(prev => [newSession, ...prev]);
+    clientRef.current.samples = []; // Clear samples for next session
+  };
+
+  const handleExportSession = (session: RideSession) => {
+    const rows = session.samples.map((s) => ({
+      timestamp: new Date(s.timestamp).toISOString(),
+      powerW: s.powerW ?? "",
+      cadenceRpm: s.cadenceRpm ?? "",
+      speedKph: s.speedKph ?? "",
+      resistance: s.resistance ?? "",
+      heartRateBpm: s.heartRateBpm ?? "",
+    }));
+
+    const csv = [
+      "timestamp,powerW,cadenceRpm,speedKph,resistance,heartRateBpm",
+      ...rows.map((r) =>
+        [r.timestamp, r.powerW, r.cadenceRpm, r.speedKph, r.resistance, r.heartRateBpm].join(",")
+      ),
+    ].join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `kickr-${session.workoutName.replace(/\s+/g, '-')}-${session.timestamp}.csv`;
+    a.click();
+
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDeleteSession = (id: string) => {
+    if (window.confirm("Delete this session?")) {
+      deleteRideSession(id);
+      setSessions(prev => prev.filter(s => s.id !== id));
+    }
+  };
 
   async function exportCsv() {
     const rows = clientRef.current.samples.map((s) => ({
@@ -325,8 +395,13 @@ export default function App() {
           <div className="flex flex-col rounded-md border bg-muted/20 overflow-hidden">
             <div className="p-4 grid grid-cols-3 gap-4 text-center">
               <div className="flex flex-col">
-                <span className="text-xs text-muted-foreground uppercase font-semibold h-8 flex flex-col items-center justify-end pb-1">
-                  Power
+                <span className="text-xs text-muted-foreground uppercase font-semibold h-8 flex flex-col items-center justify-end pb-1 gap-0.5">
+                  <span>Power</span>
+                  {activeTrainerMode.type === "erg" && (
+                    <span className="text-[10px] text-primary normal-case font-medium leading-none">
+                      Target: {activeTrainerMode.watts}W
+                    </span>
+                  )}
                 </span>
                 <span className="text-2xl font-mono">{power ?? "-"} <span className="text-sm">W</span></span>
               </div>
@@ -422,7 +497,7 @@ export default function App() {
                     disabled={connectionState !== "connected"}
                   />
                   <Button 
-                    onClick={applyTargetPower} 
+                    onClick={() => applyTargetPower()} 
                     className="flex-1"
                     disabled={connectionState !== "connected"}
                   >
@@ -466,14 +541,73 @@ export default function App() {
             )}
           </div>
 
-          <Button 
-            onClick={exportCsv} 
-            variant="outline" 
-            className="w-full"
-            disabled={clientRef.current.samples.length === 0}
-          >
-            Export CSV ({clientRef.current.samples.length} samples)
-          </Button>
+          <div className="flex flex-col gap-2 pt-2 border-t">
+            <h3 className="text-xs font-bold text-muted-foreground uppercase tracking-widest px-1">Session History</h3>
+            
+            {/* Current unsaved samples if any */}
+            {clientRef.current.samples.length > 0 && (
+              <div className="p-3 border rounded-md bg-muted/10 border-dashed flex flex-col gap-2">
+                <div className="flex justify-between items-center">
+                  <span className="font-semibold text-xs">Unsaved Session</span>
+                  <span className="text-[10px] text-muted-foreground">{clientRef.current.samples.length} samples</span>
+                </div>
+                <Button onClick={exportCsv} variant="outline" size="sm" className="w-full h-7 text-xs">
+                  Export Temporary CSV
+                </Button>
+              </div>
+            )}
+
+            {sessions.length === 0 && clientRef.current.samples.length === 0 && (
+              <p className="text-xs text-muted-foreground text-center py-4">No sessions recorded yet.</p>
+            )}
+
+            <div className="flex flex-col gap-2 max-h-[300px] overflow-y-auto pr-1">
+              {sessions.map((session) => (
+                <div key={session.id} className="p-3 border rounded-md bg-card flex flex-col gap-2 group relative">
+                  <div className="flex justify-between items-start">
+                    <div className="flex flex-col min-w-0">
+                      <span className="font-bold text-sm truncate pr-6">{session.workoutName}</span>
+                      <span className="text-[10px] text-muted-foreground">
+                        {new Date(session.timestamp).toLocaleDateString()} at {new Date(session.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                    <button 
+                      onClick={() => handleDeleteSession(session.id)}
+                      className="opacity-0 group-hover:opacity-100 absolute top-2 right-2 text-muted-foreground hover:text-destructive transition-opacity"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-1 text-center">
+                    <div className="flex flex-col">
+                      <span className="text-[9px] text-muted-foreground uppercase">Power</span>
+                      <span className="font-mono text-xs">{session.metrics.avgPower || "-"}W</span>
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="text-[9px] text-muted-foreground uppercase">TSS</span>
+                      <span className="font-mono text-xs">{Math.round(session.metrics.tss)}</span>
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="text-[9px] text-muted-foreground uppercase">Time</span>
+                      <span className="font-mono text-xs">
+                        {Math.floor(session.metrics.durationSeconds / 60)}m
+                      </span>
+                    </div>
+                  </div>
+
+                  <Button 
+                    onClick={() => handleExportSession(session)} 
+                    variant="secondary" 
+                    size="sm" 
+                    className="w-full h-7 text-[10px] font-bold"
+                  >
+                    DOWNLOAD CSV
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -482,6 +616,7 @@ export default function App() {
         <WorkoutPlayer 
            disabled={connectionState !== "connected"} 
            onPowerTargetChange={applyTargetPower} 
+           onStopSession={handleStopSession}
         />
       </div>
     </main>
