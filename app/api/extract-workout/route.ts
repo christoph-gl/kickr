@@ -1,0 +1,60 @@
+import { generateObject } from "ai";
+import { z } from "zod";
+import { NextResponse } from "next/server";
+
+export async function POST(request: Request) {
+  try {
+    const formData = await request.formData();
+    const file = formData.get("file") as File | null;
+
+    if (!file) {
+      return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
+    }
+
+    const buffer = await file.arrayBuffer();
+
+    const result = await generateObject({
+      model: process.env.AI_GATEWAY_MODEL || "google/gemini-3-flash",
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: `You are a cycling workout extractor for a 4DP / ERG mode chart.
+Extract the sequence of workout blocks from left to right.
+The chart usually has a white horizontal line which represents FTP (100% FTP).
+Colors represent different reference metrics:
+- Blue bars reference FTP.
+- Yellow bars reference MAP.
+- Orange bars reference AC.
+- Pink bars reference NM.
+
+Estimate the duration in seconds based on the width of the bars. The total duration is usually given (e.g., 54:21) or implied.
+Estimate the intensity percentage based on the height relative to the reference metric. For example, if a blue bar is exactly on the white FTP line, it is 100% FTP.`
+            },
+            {
+              type: "image",
+              image: buffer,
+            },
+          ],
+        },
+      ],
+      schema: z.object({
+        name: z.string().describe("Title of the workout, or 'Extracted Workout'"),
+        total_duration_minutes: z.number(),
+        blocks: z.array(z.object({
+          duration_seconds: z.number(),
+          zone: z.string().describe("e.g., Recovery, Tempo, AC, MAP, NM"),
+          intensity_percent: z.number().describe("percentage relative to the reference_metric, e.g., 100"),
+          reference_metric: z.enum(["FTP", "MAP", "AC", "NM"])
+        }))
+      })
+    });
+
+    return NextResponse.json(result.object);
+  } catch (error) {
+    console.error("Error extracting workout:", error);
+    return NextResponse.json({ error: String(error) }, { status: 500 });
+  }
+}

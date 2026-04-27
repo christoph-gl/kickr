@@ -4,6 +4,16 @@ import { useRef, useState } from "react";
 import { KickrCore2Client } from "@/lib/kickr-client";
 import { HeartRateClient } from "@/lib/hr-client";
 import { Button } from "@/components/ui/button";
+import { RIDER_PROFILE } from "@/lib/profile";
+import { WorkoutPlayer } from "@/components/workout-player";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 
 type ConnectionState = "disconnected" | "connecting" | "connected";
 type TrainerMode = "erg" | "resistance";
@@ -27,6 +37,10 @@ export default function App() {
   
   // What the trainer is currently running
   const [activeTrainerMode, setActiveTrainerMode] = useState<ActiveTrainerMode>({ type: "none" });
+
+  const currentHrZone = heartRate 
+    ? RIDER_PROFILE.hrZones.find(z => heartRate >= z.minBpm && heartRate <= z.maxBpm) 
+    : undefined;
 
   async function connect() {
     try {
@@ -146,8 +160,99 @@ export default function App() {
 
   return (
     <main className="flex min-h-svh p-6">
+      {/* Left Column - Controls & Telemetry */}
       <div className="flex max-w-md min-w-0 flex-col gap-6 text-sm w-full">
-        <h1 className="text-2xl font-bold">Workout Controller</h1>
+        
+        {/* Header with Settings */}
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-bold">Workout Controller</h1>
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button variant="outline" size="sm">Settings</Button>
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-xl max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>Profile Settings</DialogTitle>
+                <DialogDescription>
+                  Your current rider profile and target zones.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="flex flex-col gap-6 mt-4">
+                {/* 4DP Profile Card */}
+                <div className="flex flex-col border rounded-md bg-card overflow-hidden">
+                  <div className="p-4 bg-muted/20 border-b">
+                    <h3 className="font-semibold text-base">Four Dimensional Power (4DP®) Profile</h3>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Your Neuromuscular Power (NM), Anaerobic Capacity (AC), Maximal Aerobic Power (MAP) and Functional Threshold Power (FTP) are used to set your workout targets.
+                    </p>
+                  </div>
+                  <div className="flex flex-col divide-y">
+                    <div className="flex items-center justify-between p-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-4 h-4 rounded-full" style={{ backgroundColor: RIDER_PROFILE.colors.nm }}></div>
+                        <span className="font-medium">NM (5 second)</span>
+                      </div>
+                      <span className="font-mono">{RIDER_PROFILE.fourDP.nm} watts</span>
+                    </div>
+                    <div className="flex items-center justify-between p-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-4 h-4 rounded-full" style={{ backgroundColor: RIDER_PROFILE.colors.ac }}></div>
+                        <span className="font-medium">AC (1 minute)</span>
+                      </div>
+                      <span className="font-mono">{RIDER_PROFILE.fourDP.ac} watts</span>
+                    </div>
+                    <div className="flex items-center justify-between p-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-4 h-4 rounded-full" style={{ backgroundColor: RIDER_PROFILE.colors.map }}></div>
+                        <span className="font-medium">MAP (5 minute)</span>
+                      </div>
+                      <span className="font-mono">{RIDER_PROFILE.fourDP.map} watts</span>
+                    </div>
+                    <div className="flex items-center justify-between p-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-4 h-4 rounded-full" style={{ backgroundColor: RIDER_PROFILE.colors.ftp }}></div>
+                        <span className="font-medium">FTP (20 minute)</span>
+                      </div>
+                      <span className="font-mono">{RIDER_PROFILE.fourDP.ftp} watts</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Heart Rate Zones Card */}
+                <div className="flex flex-col border rounded-md bg-card overflow-hidden">
+                  <div className="p-4 bg-muted/20 border-b flex justify-between items-center">
+                    <div>
+                      <h3 className="font-semibold text-base">cTHR and Heart Rate Zones</h3>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Cycling Threshold Heart Rate (cTHR) is your expected heart rate when riding at FTP.
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-xs text-muted-foreground uppercase font-semibold">cTHR</div>
+                      <div className="font-mono text-lg">{RIDER_PROFILE.cTHR} bpm</div>
+                    </div>
+                  </div>
+                  <div className="flex flex-col divide-y">
+                    <div className="grid grid-cols-3 gap-4 p-3 px-4 text-xs font-semibold text-muted-foreground uppercase bg-muted/10">
+                      <div>Zone</div>
+                      <div>Range (%cTHR)</div>
+                      <div className="text-right">BPM</div>
+                    </div>
+                    {RIDER_PROFILE.hrZones.map((zone) => (
+                      <div key={zone.id} className="grid grid-cols-3 gap-4 p-4 items-center">
+                        <div className="font-medium">{zone.name}</div>
+                        <div className="text-muted-foreground">{zone.percentageRange}</div>
+                        <div className="text-right font-mono">
+                          {zone.id === "z1" ? `< ${zone.maxBpm}` : zone.id === "z5" ? `> ${zone.minBpm}` : `${zone.minBpm} - ${zone.maxBpm}`}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
+        </div>
 
         <div className="flex flex-col gap-4">
           
@@ -220,16 +325,35 @@ export default function App() {
           <div className="flex flex-col rounded-md border bg-muted/20 overflow-hidden">
             <div className="p-4 grid grid-cols-3 gap-4 text-center">
               <div className="flex flex-col">
-                <span className="text-xs text-muted-foreground uppercase font-semibold">Power</span>
+                <span className="text-xs text-muted-foreground uppercase font-semibold h-8 flex flex-col items-center justify-end pb-1">
+                  Power
+                </span>
                 <span className="text-2xl font-mono">{power ?? "-"} <span className="text-sm">W</span></span>
               </div>
               <div className="flex flex-col">
-                <span className="text-xs text-muted-foreground uppercase font-semibold">Cadence</span>
+                <span className="text-xs text-muted-foreground uppercase font-semibold h-8 flex flex-col items-center justify-end pb-1">
+                  Cadence
+                </span>
                 <span className="text-2xl font-mono">{cadence ?? "-"} <span className="text-sm">rpm</span></span>
               </div>
               <div className="flex flex-col">
-                <span className="text-xs text-muted-foreground uppercase font-semibold">HR</span>
-                <span className="text-2xl font-mono">{heartRate ?? "-"} <span className="text-sm">bpm</span></span>
+                <span className="text-xs text-muted-foreground uppercase font-semibold h-8 flex flex-col items-center justify-end pb-1 gap-0.5">
+                  <span>HR</span>
+                  {currentHrZone && (
+                    <span 
+                      className="text-[10px] normal-case font-medium leading-none"
+                      style={{ color: currentHrZone.color }}
+                    >
+                      {currentHrZone.name.split(" ")[0]} ({currentHrZone.minBpm}-{currentHrZone.maxBpm})
+                    </span>
+                  )}
+                </span>
+                <span 
+                  className="text-2xl font-mono"
+                  style={{ color: currentHrZone?.color }}
+                >
+                  {heartRate ?? "-"} <span className="text-sm opacity-75">bpm</span>
+                </span>
               </div>
             </div>
             <div className="px-4 py-2 bg-muted/40 border-t flex justify-between items-center">
@@ -351,6 +475,14 @@ export default function App() {
             Export CSV ({clientRef.current.samples.length} samples)
           </Button>
         </div>
+      </div>
+
+      {/* Right Column - Workout Player */}
+      <div className="hidden lg:flex min-w-0 flex-col gap-6 w-full max-w-4xl">
+        <WorkoutPlayer 
+           disabled={connectionState !== "connected"} 
+           onPowerTargetChange={applyTargetPower} 
+        />
       </div>
     </main>
   );

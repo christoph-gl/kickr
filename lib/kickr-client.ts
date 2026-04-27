@@ -100,9 +100,9 @@ export class KickrCore2Client {
 
   async setResistance(level: number) {
     // FTMS opcode 0x04 = Set Target Resistance Level.
-    // Common encoding: sint16, resolution 0.1.
-    // Example: 25.0 -> 250 -> 0xfa 0x00.
-    const raw = Math.round(level * 10);
+    // The FTMS spec defines resolution as 0.1 (so 100% = 1000).
+    // However, Wahoo KICKR CORE uses a direct 0-100 scale (100% = 100).
+    const raw = Math.round(level);
     const buffer = new ArrayBuffer(3);
     const view = new DataView(buffer);
 

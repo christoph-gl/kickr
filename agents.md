@@ -24,7 +24,7 @@ Communication relies heavily on the **Web Bluetooth API** (`navigator.bluetooth`
    - Disconnect handling is crucial (`gattserverdisconnected` events) for multiple parallel connections.
 2. **FTMS Specifics:**
    - **ERG Mode (Target Power):** Uses Opcode `0x05`. Sends watts as `int16`. Trainer auto-adjusts resistance based on cadence.
-   - **Resistance Mode:** Uses Opcode `0x04`. Sends percentage as `int16` scaled by `10` (resolution `0.1`).
+   - **Resistance Mode:** Uses Opcode `0x04`. Sends percentage as `int16`. Note: While the FTMS spec defines a resolution of `0.1` (so 100% = 1000), Wahoo trainers deviate from the spec and expect a direct `0-100` scale (100% = 100).
    - The trainer will drop the control link or fail to execute commands if `requestControl()` (Opcode `0x00`) or `reset()` (Opcode `0x01`) is missing during initialization.
 3. **Data Decoding:**
    - The Indoor Bike Data parser requires reading a `flags` bitmask to determine exactly which values (cadence, power, speed, distance) are present in the byte array.

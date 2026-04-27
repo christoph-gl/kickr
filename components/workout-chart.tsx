@@ -1,0 +1,212 @@
+"use client";
+
+import { useState, useRef } from "react";
+import { RIDER_PROFILE } from "@/lib/profile";
+import { Workout, calculateWorkoutMetrics } from "@/lib/workouts";
+
+function getColorForPower(power: number) {
+  if (power >= RIDER_PROFILE.fourDP.ac * 0.95) return RIDER_PROFILE.colors.nm;
+  if (power >= RIDER_PROFILE.fourDP.map * 0.95) return RIDER_PROFILE.colors.ac;
+  if (power >= RIDER_PROFILE.fourDP.ftp * 1.05) return RIDER_PROFILE.colors.map;
+  return RIDER_PROFILE.colors.ftp;
+}
+
+export function WorkoutChart({ 
+  workout, 
+  progressSeconds,
+  onSeek
+}: { 
+  workout: Workout; 
+  progressSeconds: number;
+  onSeek?: (seconds: number) => void;
+}) {
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [hoverTime, setHoverTime] = useState<number | null>(null);
+
+  const totalDuration = workout.blocks.reduce((acc, b) => acc + b.durationSeconds, 0);
+  // Ensure the chart scales to at least AC or the max power in the workout
+  const maxPower = Math.max(
+    ...workout.blocks.map(b => b.targetPower),
+    RIDER_PROFILE.fourDP.ac * 1.1
+  );
+  
+  const height = 300;
+  const ftpY = height - (RIDER_PROFILE.fourDP.ftp / maxPower) * height;
+
+  const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (!svgRef.current) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const percent = Math.max(0, Math.min(1, x / rect.width));
+    setHoverTime(percent * totalDuration);
+  };
+
+  const handleMouseLeave = () => {
+    setHoverTime(null);
+  };
+
+  const handleClick = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (!svgRef.current || !onSeek) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const percent = Math.max(0, Math.min(1, x / rect.width));
+    onSeek(Math.round(percent * totalDuration));
+  };
+
+  const metrics = calculateWorkoutMetrics(workout, RIDER_PROFILE.fourDP.ftp);
+
+  // Find hovered block
+  let hoveredBlock = null;
+  if (hoverTime !== null) {
+    let acc = 0;
+    for (const b of workout.blocks) {
+      acc += b.durationSeconds;
+      if (hoverTime <= acc) {
+        hoveredBlock = b;
+        break;
+      }
+    }
+  }
+
+  let currentX = 0;
+
+  return (
+    <div className="w-full relative bg-[#202020] p-4 rounded-md border overflow-hidden">
+      <div className="flex justify-between items-center mb-4">
+        <div className="flex gap-6">
+          <div className="flex flex-col">
+            <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">Duration</span>
+            <span className="font-mono font-bold text-lg">{Math.floor(totalDuration / 60)}:{String(totalDuration % 60).padStart(2, '0')}</span>
+          </div>
+          <div className="flex flex-col">
+            <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">TSS®</span>
+            <span className="font-mono font-bold text-lg">{Math.round(metrics.tss)}</span>
+          </div>
+          <div className="flex flex-col">
+            <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">IF®</span>
+            <span className="font-mono font-bold text-lg">{metrics.iff.toFixed(2)}</span>
+          </div>
+        </div>
+        <div className="text-right flex items-center gap-4">
+          <div className="flex gap-1.5 items-center">
+            <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider mr-1">NM</span>
+            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: RIDER_PROFILE.colors.nm }}></div>
+            <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider ml-1 mr-1">AC</span>
+            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: RIDER_PROFILE.colors.ac }}></div>
+            <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider ml-1 mr-1">MAP</span>
+            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: RIDER_PROFILE.colors.map }}></div>
+            <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider ml-1 mr-1">FTP</span>
+            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: RIDER_PROFILE.colors.ftp }}></div>
+          </div>
+        </div>
+      </div>
+
+      <div className="relative w-full h-[300px] select-none group">
+        <svg 
+          ref={svgRef}
+          className={`w-full h-full ${onSeek ? "cursor-pointer" : ""}`}
+          preserveAspectRatio="none" 
+          viewBox={`0 0 100 ${height}`}
+          onMouseMove={handleMouseMove}
+          onMouseLeave={handleMouseLeave}
+          onClick={handleClick}
+        >
+          {/* FTP Line */}
+          <line 
+            x1="0" 
+            y1={ftpY} 
+            x2="100" 
+            y2={ftpY} 
+            stroke="white" 
+            strokeWidth="0.5" 
+            strokeOpacity="0.8" 
+          />
+          
+          {workout.blocks.map((block, i) => {
+            const blockWidth = (block.durationSeconds / totalDuration) * 100;
+            const blockHeight = (block.targetPower / maxPower) * height;
+            const y = height - blockHeight;
+            const color = getColorForPower(block.targetPower);
+            
+            const rect = (
+              <rect
+                key={i}
+                x={currentX}
+                y={y}
+                width={blockWidth}
+                height={blockHeight}
+                fill={color}
+                stroke="#202020"
+                strokeWidth="0.1"
+              />
+            );
+            currentX += blockWidth;
+            return rect;
+          })}
+
+          {/* Progress Overlay */}
+          {progressSeconds > 0 && (
+             <rect 
+               x="0" 
+               y="0" 
+               width={(progressSeconds / totalDuration) * 100} 
+               height={height} 
+               fill="white" 
+               fillOpacity="0.15" 
+               style={{ pointerEvents: 'none' }}
+             />
+          )}
+
+          {/* Current Time Line */}
+          {progressSeconds > 0 && progressSeconds < totalDuration && (
+             <line 
+               x1={(progressSeconds / totalDuration) * 100} 
+               y1="0" 
+               x2={(progressSeconds / totalDuration) * 100} 
+               y2={height} 
+               stroke="white" 
+               strokeWidth="0.3" 
+               style={{ pointerEvents: 'none' }}
+             />
+          )}
+
+          {/* Hover Time Line */}
+          {hoverTime !== null && (
+             <line 
+               x1={(hoverTime / totalDuration) * 100} 
+               y1="0" 
+               x2={(hoverTime / totalDuration) * 100} 
+               y2={height} 
+               stroke="rgba(255,255,255,0.5)" 
+               strokeWidth="0.2"
+               strokeDasharray="1 1"
+               style={{ pointerEvents: 'none' }}
+             />
+          )}
+        </svg>
+
+        {/* FTP Label Overlay */}
+        <div 
+          className="absolute left-2 px-2 py-0.5 bg-white text-black text-xs font-bold rounded-full shadow-sm pointer-events-none"
+          style={{ top: `${(ftpY / height) * 100}%`, transform: 'translateY(-50%)' }}
+        >
+          {RIDER_PROFILE.fourDP.ftp} W
+        </div>
+
+        {/* Hover Tooltip Overlay */}
+        {hoverTime !== null && hoveredBlock && (
+          <div 
+            className="absolute px-2 py-1 bg-black/90 border border-white/20 text-white text-xs font-bold rounded shadow-md pointer-events-none transform -translate-x-1/2 -translate-y-full transition-opacity opacity-0 group-hover:opacity-100"
+            style={{ 
+              left: `${(hoverTime / totalDuration) * 100}%`,
+              // Position it slightly above the hovered block's top edge
+              top: `calc(${((height - (hoveredBlock.targetPower / maxPower) * height) / height) * 100}% - 10px)` 
+            }}
+          >
+            {hoveredBlock.targetPower} W
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
