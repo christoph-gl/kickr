@@ -1,15 +1,15 @@
 # KICKR CORE 2 Web Controller
 
-A Next.js, TypeScript, and React-based web application that connects directly to your Wahoo KICKR CORE 2 smart trainer via **Web Bluetooth** using the **Bluetooth FTMS (Fitness Machine Service)** protocol. 
+A Next.js, TypeScript, and React-based web application that connects directly to your Wahoo KICKR CORE 2 smart trainer and a Bluetooth Heart Rate Monitor via **Web Bluetooth**.
 
 ## Features
 
-- **Connect & Disconnect:** Manage Bluetooth GATT connections securely and see real-time UI state.
-- **Live Telemetry:** Streams real-time Power (Watts) and Cadence (RPM) from the `Indoor Bike Data` FTMS characteristic.
+- **Connect & Disconnect:** Manage Bluetooth GATT connections securely and see real-time UI state for both the Smart Trainer and a separate Heart Rate Monitor (like an Amazfit pulse watch).
+- **Live Telemetry:** Streams real-time Power (Watts) and Cadence (RPM) from the `Indoor Bike Data` FTMS characteristic, synchronized with live Heart Rate (BPM) from a secondary Bluetooth HRM.
 - **Trainer Modes:**
   - **ERG Mode:** Set a target power (e.g. 200 W) and the trainer dynamically adjusts resistance to maintain it regardless of cadence/gearing.
   - **Resistance Mode:** Set a static percentage resistance (0-100%).
-- **Data Export:** Download a `.csv` record of your ride telemetry containing timestamps, power, cadence, speed, and resistance level.
+- **Data Export:** Download a `.csv` record of your ride telemetry containing timestamps, power, cadence, speed, heart rate, and resistance level.
 
 ## Getting Started
 
@@ -31,7 +31,7 @@ A Next.js, TypeScript, and React-based web application that connects directly to
 - Next.js (App Router)
 - React
 - TypeScript
-- Web Bluetooth API
+- Web Bluetooth API (FTMS protocol for trainer, standard HRM protocol for heart rate)
 - Tailwind CSS
 - shadcn/ui components
 

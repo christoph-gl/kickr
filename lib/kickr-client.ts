@@ -4,6 +4,7 @@ export type BikeSample = {
   cadenceRpm?: number;
   powerW?: number;
   resistance?: number;
+  heartRateBpm?: number;
 };
 
 const FTMS_SERVICE = 0x1826;
@@ -17,6 +18,7 @@ export class KickrCore2Client {
   private bikeData?: BluetoothRemoteGATTCharacteristic;
 
   public samples: BikeSample[] = [];
+  public currentHeartRate?: number;
 
   get isConnected() {
     return this.device?.gatt?.connected ?? false;
@@ -53,6 +55,12 @@ export class KickrCore2Client {
     this.bikeData.addEventListener("characteristicvaluechanged", (event) => {
       const value = (event.target as BluetoothRemoteGATTCharacteristic).value!;
       const sample = parseIndoorBikeData(value);
+      
+      // Inject external HR if the trainer didn't provide one natively
+      if (this.currentHeartRate !== undefined && sample.heartRateBpm === undefined) {
+        sample.heartRateBpm = this.currentHeartRate;
+      }
+      
       this.samples.push(sample);
       onSample(sample);
     });
@@ -180,6 +188,7 @@ function parseIndoorBikeData(data: DataView): BikeSample {
 
   if (flags & 0x0200) {
     // Heart rate
+    sample.heartRateBpm = data.getUint8(offset);
     offset += 1;
   }
 
