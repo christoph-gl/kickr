@@ -20,6 +20,51 @@ export function WorkoutPlayer({
   const lastTargetRef = useRef<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const zwoFileInputRef = useRef<HTMLInputElement>(null);
+  const wakeLockRef = useRef<any>(null);
+
+  // Wake Lock implementation
+  const requestWakeLock = async () => {
+    if ("wakeLock" in navigator) {
+      try {
+        wakeLockRef.current = await (navigator as any).wakeLock.request("screen");
+        console.log("Wake Lock active");
+      } catch (err) {
+        console.error(`${(err as Error).name}, ${(err as Error).message}`);
+      }
+    }
+  };
+
+  const releaseWakeLock = async () => {
+    if (wakeLockRef.current) {
+      try {
+        await wakeLockRef.current.release();
+        wakeLockRef.current = null;
+        console.log("Wake Lock released");
+      } catch (err) {
+        console.error(`${(err as Error).name}, ${(err as Error).message}`);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (isPlaying) {
+      requestWakeLock();
+    } else {
+      releaseWakeLock();
+    }
+
+    const handleVisibilityChange = async () => {
+      if (wakeLockRef.current !== null && document.visibilityState === "visible") {
+        await requestWakeLock();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      releaseWakeLock();
+    };
+  }, [isPlaying]);
 
   useEffect(() => {
     const saved = getSavedWorkouts();

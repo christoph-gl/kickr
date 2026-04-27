@@ -34,6 +34,7 @@ Communication relies heavily on the **Web Bluetooth API** (`navigator.bluetooth`
    - Workouts are scaled against the `RIDER_PROFILE` (FTP, MAP, AC, NM).
    - The player handles automatic ERG mode adjustments as the timeline progresses.
    - The chart calculates real-time NP, TSS, and IF based on the loaded workout blocks.
+   - **Screen Wake Lock:** Uses the `navigator.wakeLock` API to prevent the device from sleeping while a workout is playing. It re-requests the lock on `visibilitychange` to handle tab switching.
 5. **Workout Imports (ZWO & AI):**
    - The app natively parses standard XML `.zwo` (Zwift) files directly in the browser via `DOMParser`.
    - The app can extract workouts from screenshots using the **Vercel AI SDK** and **Vercel AI Gateway**. The backend endpoint (`/api/extract-workout/route.ts`) expects `AI_GATEWAY_API_KEY` and `AI_GATEWAY_MODEL` to be set in `.env.local` to securely route multimodal requests to models like Gemini Flash.

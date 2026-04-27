@@ -13,6 +13,7 @@ A Next.js, TypeScript, and React-based web application that connects directly to
   - Visualize your workout timeline with a dynamic, color-coded SVG chart scaled to your personal 4DP® profile.
   - Play, pause, or click to seek to any point in the workout—your trainer's ERG resistance will instantly update.
   - Real-time calculations of workout metrics including Normalized Power (NP), Intensity Factor (IF®), and Training Stress Score (TSS®).
+  - **Screen Wake Lock:** Automatically prevents your computer or tablet from sleeping or dimming the screen during an active workout session.
 - **Workout Imports:**
   - **ZWO Files:** Parse and load industry-standard Zwift XML workout files directly in the browser.
   - **AI Image Import:** Upload a screenshot of a 4DP® or ERG workout chart, and the Vercel AI SDK (via Vercel AI Gateway) will automatically extract the structure and translate it into a playable workout scaled to your profile.
