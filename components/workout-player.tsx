@@ -18,6 +18,7 @@ import {
 export function WorkoutPlayer({ 
   onPowerTargetChange,
   onStopSession,
+  onWorkoutChange,
   disabled,
   power,
   cadence,
@@ -27,6 +28,7 @@ export function WorkoutPlayer({
 }: { 
   onPowerTargetChange: (watts: number) => void;
   onStopSession: (workoutName: string) => void;
+  onWorkoutChange?: (workout: Workout) => void;
   disabled: boolean;
   power?: number;
   cadence?: number;
@@ -36,6 +38,12 @@ export function WorkoutPlayer({
 }) {
   const [allWorkouts, setAllWorkouts] = useState<Workout[]>(WORKOUTS);
   const [workout, setWorkout] = useState<Workout>(WORKOUTS[0]);
+
+  useEffect(() => {
+    if (onWorkoutChange) {
+      onWorkoutChange(workout);
+    }
+  }, [workout, onWorkoutChange]);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isPickerOpen, setIsPickerOpen] = useState(false);

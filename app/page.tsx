@@ -46,10 +46,34 @@ export default function App() {
   const [activeTrainerMode, setActiveTrainerMode] = useState<ActiveTrainerMode>({ type: "none" });
 
   const [sessions, setSessions] = useState<RideSession[]>([]);
+  const currentSessionFilenameRef = useRef<string | null>(null);
+  const activeWorkoutNameRef = useRef<string>("Manual Ride");
+  const unsavedSamplesRef = useRef<any[]>([]);
 
   useEffect(() => {
     setSessions(getSavedRideSessions());
   }, []);
+
+  const logSamples = async (samples: any[], isNew: boolean, finalMetrics?: any) => {
+    if (!currentSessionFilenameRef.current) return;
+    try {
+      await fetch("/api/log-ride", {
+        method: "POST",
+        body: JSON.stringify({
+          filename: currentSessionFilenameRef.current,
+          samples,
+          isNew,
+          metadata: isNew ? {
+            workoutName: activeWorkoutNameRef.current,
+            profile: RIDER_PROFILE.fourDP
+          } : undefined,
+          finalMetrics
+        }),
+      });
+    } catch (e) {
+      console.error("Failed to log samples to server:", e);
+    }
+  };
 
   const currentHrZone = heartRate 
     ? RIDER_PROFILE.hrZones.find(z => heartRate >= z.minBpm && heartRate <= z.maxBpm) 
@@ -58,6 +82,10 @@ export default function App() {
   async function connect() {
     try {
       setConnectionState("connecting");
+      // Reset logging for a potential new session
+      currentSessionFilenameRef.current = `ride-${Date.now()}`;
+      unsavedSamplesRef.current = [];
+
       await clientRef.current.connect(
         (sample) => {
           setPower(sample.powerW);
@@ -65,6 +93,15 @@ export default function App() {
           // Only update local HR state if trainer provides it AND external HRM is not connected
           if (sample.heartRateBpm !== undefined && !hrClientRef.current.isConnected) {
             setHeartRate(sample.heartRateBpm);
+          }
+
+          // Buffer and log samples
+          unsavedSamplesRef.current.push(sample);
+          if (unsavedSamplesRef.current.length >= 10) {
+            const toLog = [...unsavedSamplesRef.current];
+            const isNew = clientRef.current.samples.length <= 10;
+            unsavedSamplesRef.current = [];
+            logSamples(toLog, isNew);
           }
         },
         () => {
@@ -74,6 +111,11 @@ export default function App() {
           setActiveTrainerMode({ type: "none" });
           if (!hrClientRef.current.isConnected) {
             setHeartRate(undefined);
+          }
+          // Final log of remaining samples
+          if (unsavedSamplesRef.current.length > 0) {
+            logSamples(unsavedSamplesRef.current, false);
+            unsavedSamplesRef.current = [];
           }
         }
       );
@@ -152,6 +194,11 @@ export default function App() {
     if (samples.length === 0) return;
 
     const metrics = calculateActualMetrics(samples, RIDER_PROFILE.fourDP.ftp);
+    
+    // Final log of remaining samples and metrics before ending session
+    logSamples(unsavedSamplesRef.current, false, metrics);
+    unsavedSamplesRef.current = [];
+
     const newSession: RideSession = {
       id: "session-" + Date.now(),
       workoutName,
@@ -163,6 +210,7 @@ export default function App() {
     saveRideSession(newSession);
     setSessions(prev => [newSession, ...prev]);
     clientRef.current.samples = []; // Clear samples for next session
+    currentSessionFilenameRef.current = null; // Mark session as ended
   };
 
   const handleExportSession = (session: RideSession) => {
@@ -567,6 +615,7 @@ export default function App() {
            disabled={connectionState !== "connected"} 
            onPowerTargetChange={applyTargetPower} 
            onStopSession={handleStopSession}
+           onWorkoutChange={(w) => activeWorkoutNameRef.current = w.name}
            power={power}
            cadence={cadence}
            heartRate={heartRate}
