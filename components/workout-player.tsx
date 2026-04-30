@@ -5,6 +5,7 @@ import { WORKOUTS, Workout, parseLLMWorkout, saveWorkout, getSavedWorkouts, upda
 import { WorkoutChart } from "./workout-chart";
 import { Button } from "./ui/button";
 import { RIDER_PROFILE } from "@/lib/profile";
+import { audioService } from "@/lib/audio";
 import {
   Dialog,
   DialogContent,
@@ -39,6 +40,7 @@ export function WorkoutPlayer({
   const [isUploading, setIsUploading] = useState(false);
   const [isPickerOpen, setIsPickerOpen] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [upcomingChange, setUpcomingChange] = useState<{ nextTarget: number, currentTarget: number, seconds: number } | null>(null);
   const lastTargetRef = useRef<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const zwoFileInputRef = useRef<HTMLInputElement>(null);
@@ -121,17 +123,55 @@ export function WorkoutPlayer({
 
     if (newBlockIndex === -1) {
       setIsPlaying(false);
+      setUpcomingChange(null);
       return;
+    }
+
+    // Determine upcoming changes and play notification
+    let accTime = 0;
+    let foundUpcoming = false;
+    for (let i = 0; i < workout.blocks.length; i++) {
+      const blockStart = accTime;
+      const blockEnd = accTime + workout.blocks[i].durationSeconds;
+      accTime = blockEnd;
+      
+      if (i > newBlockIndex && workout.blocks[i].targetPower !== workout.blocks[newBlockIndex].targetPower) {
+        const timeUntilNextChange = blockStart - elapsedSeconds;
+        if (timeUntilNextChange > 0 && timeUntilNextChange <= 10) {
+          setUpcomingChange({ 
+            nextTarget: workout.blocks[i].targetPower, 
+            currentTarget: workout.blocks[newBlockIndex].targetPower,
+            seconds: timeUntilNextChange 
+          });
+          foundUpcoming = true;
+          if (timeUntilNextChange === 10) {
+            audioService.playNotification();
+          }
+        }
+        break;
+      }
+    }
+    if (!foundUpcoming) {
+      setUpcomingChange(null);
     }
 
     const currentTarget = workout.blocks[newBlockIndex].targetPower;
     if (currentTarget !== lastTargetRef.current) {
+      // Play change sounds if it's not the initial target setting
+      if (lastTargetRef.current !== null) {
+        if (currentTarget > lastTargetRef.current) {
+          audioService.playAcceleration();
+        } else if (currentTarget < lastTargetRef.current) {
+          audioService.playDeceleration();
+        }
+      }
       lastTargetRef.current = currentTarget;
       onPowerTargetChange(currentTarget);
     }
   }, [elapsedSeconds, isPlaying, workout, onPowerTargetChange]);
 
   const handlePlayPause = () => {
+    audioService.init();
     if (!isPlaying) {
       // Force immediate update on play
       let timeAcc = 0;
@@ -155,6 +195,7 @@ export function WorkoutPlayer({
   const handleStop = () => {
     setIsPlaying(false);
     setElapsedSeconds(0);
+    setUpcomingChange(null);
     lastTargetRef.current = null;
   };
 
@@ -381,7 +422,7 @@ export function WorkoutPlayer({
       {/* Telemetry Card - Integrated into Player */}
       <div className="flex flex-col rounded-md border bg-muted/20 overflow-hidden">
         <div className="p-4 grid grid-cols-3 gap-4 text-center">
-          <div className="flex flex-col">
+          <div className="flex flex-col items-center">
             <span className="text-xs text-muted-foreground uppercase font-semibold h-8 flex flex-col items-center justify-end pb-1 gap-0.5">
               <span>Power</span>
               {activeTrainerMode.type === "erg" && (
@@ -391,6 +432,25 @@ export function WorkoutPlayer({
               )}
             </span>
             <span className="text-2xl font-mono">{power ?? "-"} <span className="text-sm">W</span></span>
+            
+            <div className="h-6 w-full mt-1">
+              {upcomingChange && (
+                <div className="flex flex-col items-center w-full max-w-[100px] mx-auto gap-1">
+                  <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
+                    <div 
+                      className={`h-full transition-all duration-1000 ease-linear ${upcomingChange.nextTarget > upcomingChange.currentTarget ? 'bg-orange-500' : 'bg-blue-400'}`} 
+                      style={{ width: `${(upcomingChange.seconds / 10) * 100}%` }}
+                    />
+                  </div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider leading-none">
+                    <span className={upcomingChange.nextTarget > upcomingChange.currentTarget ? 'text-orange-500' : 'text-blue-400'}>
+                      {upcomingChange.nextTarget > upcomingChange.currentTarget ? '▲' : '▼'} {upcomingChange.nextTarget}W
+                    </span>
+                    <span className="ml-1 opacity-70">in {upcomingChange.seconds}s</span>
+                  </span>
+                </div>
+              )}
+            </div>
           </div>
           <div className="flex flex-col">
             <span className="text-xs text-muted-foreground uppercase font-semibold h-8 flex flex-col items-center justify-end pb-1">
