@@ -48,28 +48,35 @@ export function parseZwoWorkout(xmlString: string): Workout {
   const parser = new DOMParser();
   const xmlDoc = parser.parseFromString(xmlString, "text/xml");
   
-  const nameNode = xmlDoc.querySelector("name");
-  const descNode = xmlDoc.querySelector("description");
+  const nameNode = xmlDoc.querySelector("name") || xmlDoc.querySelector("Name");
+  const descNode = xmlDoc.querySelector("description") || xmlDoc.querySelector("Description");
   
   const name = nameNode ? nameNode.textContent || "ZWO Workout" : "ZWO Workout";
   const description = descNode ? descNode.textContent || "Imported from ZWO file" : "Imported from ZWO file";
   
-  const workoutNodes = xmlDoc.querySelector("workout")?.children;
+  const workoutNode = xmlDoc.querySelector("workout") || xmlDoc.querySelector("Workout") || xmlDoc.querySelector("workout_file");
+  const workoutNodes = workoutNode?.children;
   const blocks: WorkoutBlock[] = [];
   
+  const getAttr = (node: Element, name: string) => {
+    return node.getAttribute(name) || node.getAttribute(name.toLowerCase()) || "0";
+  };
+  const hasAttr = (node: Element, name: string) => {
+    return node.hasAttribute(name) || node.hasAttribute(name.toLowerCase());
+  };
+
   if (workoutNodes) {
     for (let i = 0; i < workoutNodes.length; i++) {
       const node = workoutNodes[i];
       const tag = node.tagName.toLowerCase();
       
       if (tag === "steadystate" || tag === "warmup" || tag === "cooldown" || tag === "freeride") {
-        // Technically Warmup/Cooldown might have PowerLow/PowerHigh for ramps, but we'll simplify to Power or average if needed
-        const duration = parseFloat(node.getAttribute("Duration") || "0");
-        let powerRatio = parseFloat(node.getAttribute("Power") || "0");
+        const duration = parseFloat(getAttr(node, "Duration"));
+        let powerRatio = parseFloat(getAttr(node, "Power"));
         
-        if (node.hasAttribute("PowerLow") && node.hasAttribute("PowerHigh")) {
-          const powerLow = parseFloat(node.getAttribute("PowerLow") || "0");
-          const powerHigh = parseFloat(node.getAttribute("PowerHigh") || "0");
+        if (hasAttr(node, "PowerLow") && hasAttr(node, "PowerHigh")) {
+          const powerLow = parseFloat(getAttr(node, "PowerLow"));
+          const powerHigh = parseFloat(getAttr(node, "PowerHigh"));
           powerRatio = (powerLow + powerHigh) / 2; // simplified ramp
         }
         
@@ -78,11 +85,11 @@ export function parseZwoWorkout(xmlString: string): Workout {
           targetPower: Math.round(RIDER_PROFILE.fourDP.ftp * powerRatio)
         });
       } else if (tag === "intervalst") {
-        const repeat = parseInt(node.getAttribute("Repeat") || "1", 10);
-        const onDuration = parseFloat(node.getAttribute("OnDuration") || "0");
-        const onPower = parseFloat(node.getAttribute("OnPower") || "0");
-        const offDuration = parseFloat(node.getAttribute("OffDuration") || "0");
-        const offPower = parseFloat(node.getAttribute("OffPower") || "0");
+        const repeat = parseInt(getAttr(node, "Repeat") || "1", 10);
+        const onDuration = parseFloat(getAttr(node, "OnDuration"));
+        const onPower = parseFloat(getAttr(node, "OnPower"));
+        const offDuration = parseFloat(getAttr(node, "OffDuration"));
+        const offPower = parseFloat(getAttr(node, "OffPower"));
         
         for (let r = 0; r < repeat; r++) {
           blocks.push({
@@ -138,29 +145,42 @@ export function calculateWorkoutMetrics(workout: Workout, ftp: number) {
   return { np, iff, tss };
 }
 
-export function saveWorkout(workout: Workout) {
+export async function saveWorkout(workout: Workout) {
   if (typeof window === "undefined") return;
-  const saved = getSavedWorkouts();
-  saved.push(workout);
-  localStorage.setItem("saved_workouts", JSON.stringify(saved));
-}
-
-export function updateWorkout(workout: Workout) {
-  if (typeof window === "undefined") return;
-  const saved = getSavedWorkouts();
-  const index = saved.findIndex((w) => w.id === workout.id);
-  if (index !== -1) {
-    saved[index] = workout;
-    localStorage.setItem("saved_workouts", JSON.stringify(saved));
+  try {
+    await fetch("/api/workouts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(workout)
+    });
+  } catch (e) {
+    console.error("Failed to save workout via API:", e);
+    alert("Warning: Could not save workout to local file.");
   }
 }
 
-export function getSavedWorkouts(): Workout[] {
+export async function updateWorkout(workout: Workout) {
+  if (typeof window === "undefined") return;
+  try {
+    await fetch("/api/workouts", {
+      method: "POST", // POST overwrites if ID exists
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(workout)
+    });
+  } catch (e) {
+    console.error("Failed to update workout via API:", e);
+    alert("Warning: Could not save workout changes to local file.");
+  }
+}
+
+export async function getSavedWorkouts(): Promise<Workout[]> {
   if (typeof window === "undefined") return [];
   try {
-    const data = localStorage.getItem("saved_workouts");
-    return data ? JSON.parse(data) : [];
+    const res = await fetch("/api/workouts");
+    if (!res.ok) return [];
+    return await res.json();
   } catch (e) {
+    console.error("Failed to fetch workouts from API:", e);
     return [];
   }
 }

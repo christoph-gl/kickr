@@ -91,10 +91,13 @@ export function WorkoutPlayer({
   }, [isPlaying]);
 
   useEffect(() => {
-    const saved = getSavedWorkouts();
-    if (saved.length > 0) {
-      setAllWorkouts([...WORKOUTS, ...saved]);
+    async function loadSaved() {
+      const saved = await getSavedWorkouts();
+      if (saved.length > 0) {
+        setAllWorkouts([...WORKOUTS, ...saved]);
+      }
     }
+    loadSaved();
   }, []);
 
   useEffect(() => {
@@ -228,7 +231,7 @@ export function WorkoutPlayer({
       const llmWorkout = await res.json();
       const parsedWorkout = parseLLMWorkout(llmWorkout);
 
-      saveWorkout(parsedWorkout);
+      await saveWorkout(parsedWorkout);
       setAllWorkouts(prev => [...prev, parsedWorkout]);
       setWorkout(parsedWorkout);
       handleStop();
@@ -249,7 +252,7 @@ export function WorkoutPlayer({
       const text = await file.text();
       const parsedWorkout = parseZwoWorkout(text);
 
-      saveWorkout(parsedWorkout);
+      await saveWorkout(parsedWorkout);
       setAllWorkouts(prev => [...prev, parsedWorkout]);
       setWorkout(parsedWorkout);
       handleStop();
@@ -299,11 +302,11 @@ export function WorkoutPlayer({
             {workout.id.startsWith("imported-") && (
               <button
                 className="text-muted-foreground hover:text-foreground transition-colors"
-                onClick={() => {
+                onClick={async () => {
                   const newName = prompt("Enter new name for this workout:", workout.name);
                   if (newName && newName.trim() !== "") {
                     const updated = { ...workout, name: newName.trim() };
-                    updateWorkout(updated);
+                    await updateWorkout(updated);
                     setWorkout(updated);
                     setAllWorkouts(prev => prev.map(w => w.id === updated.id ? updated : w));
                   }
