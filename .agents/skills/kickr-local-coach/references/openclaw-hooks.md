@@ -1,6 +1,6 @@
 # OpenClaw Hook First Cut
 
-Use this only for Phase 2, after the OpenClaw-only Phase 1 commands work. Phase 1 must not edit the KICKR Next.js app.
+Use this for the KICKR app outbound hook path. The minimal path exists; future work should keep the same server-side token pattern.
 
 ## Fixed Decisions
 
@@ -10,6 +10,106 @@ Use this only for Phase 2, after the OpenClaw-only Phase 1 commands work. Phase 
 - Keep hook payloads structured JSON.
 - Use a dedicated hook token. Do not reuse gateway auth tokens.
 - First wake events only: `ride_started`, `ride_ended`, `rider_feedback`, `coach_check`.
+
+## Guided Setup Checklist
+
+The agent should guide the user through setup rather than inventing values.
+
+1. Discover OpenClaw status:
+
+```bash
+openclaw status
+openclaw gateway status
+```
+
+2. If needed, inspect OpenClaw config for hook settings, gateway port, hook path, and token. Prefer OpenClaw's own status/config commands when available.
+
+3. If hooks are not enabled, guide the user to configure:
+
+```json
+{
+  "hooks": {
+    "enabled": true,
+    "token": "replace-with-dedicated-hook-token",
+    "path": "/hooks"
+  }
+}
+```
+
+If OpenClaw asks whether to construct a full `config.apply` payload, the answer is yes. Build the full payload by merging in the `hooks` section while preserving unrelated config. Show the final payload to the user before applying it unless the user already explicitly approved applying it.
+
+Required config properties:
+
+```json
+{
+  "hooks": {
+    "enabled": true,
+    "token": "replace-with-dedicated-hook-token",
+    "path": "/hooks"
+  }
+}
+```
+
+Rules:
+- Use a dedicated hook token; do not reuse gateway auth tokens.
+- Prefer a clean ASCII random token, for example from `openssl rand -hex 32`.
+- Do not use Unicode characters in tokens; avoid smart punctuation and ellipses.
+- Keep `hooks.path` as `/hooks`.
+- Do not set `hooks.path` to `/`.
+- Do not change unrelated OpenClaw config fields.
+- If OpenClaw supports mapped hooks, use the mapped KICKR hook at `/hooks/kickr`.
+
+If OpenClaw's config tool locks sensitive fields during `config.apply`, it is acceptable to edit the OpenClaw JSON config directly, but only for the `hooks` section and only while preserving unrelated config. After a direct config file edit, restart the OpenClaw gateway.
+
+Safe fallback pattern:
+
+```bash
+TOKEN="$(openssl rand -hex 32)"
+python3 - <<PY
+import json
+path = "/Users/christophgl/.openclaw/openclaw.json"
+with open(path) as f:
+    config = json.load(f)
+hooks = config.setdefault("hooks", {})
+hooks["enabled"] = True
+hooks["path"] = "/hooks"
+hooks["token"] = "$TOKEN"
+with open(path, "w") as f:
+    json.dump(config, f, indent=2)
+print("$TOKEN")
+PY
+openclaw gateway restart
+```
+
+Then use the exact printed token in the KICKR app `.env.local`.
+
+4. Confirm the mapped KICKR hook URL. Expected shape:
+
+```txt
+http://127.0.0.1:<openclaw-port>/hooks/kickr
+```
+
+5. Guide the user to add these to the KICKR app `.env.local`:
+
+```txt
+OPENCLAW_HOOKS_URL=http://127.0.0.1:<openclaw-port>/hooks/kickr
+OPENCLAW_HOOKS_TOKEN=<same-dedicated-hook-token>
+```
+
+6. Tell the user to restart the Next.js dev server. Next.js does not reliably pick up `.env.local` changes without restart.
+
+7. Verify the no-browser route path:
+
+```bash
+curl -X POST http://localhost:3000/api/agent/hooks/trigger \
+  -H "Content-Type: application/json" \
+  -d '{"event":"coach_check","sessionId":null,"snapshot":{"source":"setup-smoke-test"}}'
+```
+
+Expected result:
+- `{"sent":true}` when OpenClaw is reachable and accepts the hook.
+- `{"skipped":true}` when `OPENCLAW_HOOKS_URL` is unset.
+- non-2xx means inspect OpenClaw hook config/token/path.
 
 ## OpenClaw Config Shape
 

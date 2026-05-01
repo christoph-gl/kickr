@@ -36,6 +36,12 @@ A Next.js, TypeScript, and React-based web application that connects directly to
    AI_GATEWAY_MODEL=google/gemini-3-flash
    ```
 
+   Optional OpenClaw/Hermes outbound hooks:
+   ```
+   OPENCLAW_HOOKS_URL=http://127.0.0.1:<openclaw-port>/hooks/kickr
+   OPENCLAW_HOOKS_TOKEN=replace-with-dedicated-hook-token
+   ```
+
 3. Run the development server:
    ```bash
    npm run dev
@@ -120,14 +126,14 @@ Use the cog button in the top right of the app to edit these values manually.
 
 ## Current Agent Boundary
 
-The project currently has the Next.js-side agent bridge only. The next OpenClaw/Hermes work should likely be:
+The project has a two-way local agent bridge:
 
-1. Add an OpenClaw skill or slash command to start a coaching session.
-2. Read `GET /api/rider`, `GET /api/sessions`, and `GET /api/agent/events?limit=...`.
-3. Periodically produce coaching messages or commands by writing to `POST /api/agent/commands`.
-4. After a completed ride, summarize useful learning into `rider_profile.memorySummary` through `PUT /api/rider`.
+- OpenClaw/Hermes -> KICKR: write commands to `POST /api/agent/commands`.
+- KICKR -> OpenClaw/Hermes: browser calls `POST /api/agent/hooks/trigger`, and the server forwards to `OPENCLAW_HOOKS_URL` with `OPENCLAW_HOOKS_TOKEN`.
 
-Repo-local agent instructions are available at `.agents/skills/kickr-local-coach/SKILL.md`. For a fresh OpenClaw/Hermes pass, start with that skill's Fresh Agent Discovery Script. Phase 1 is OpenClaw-only and should not edit the KICKR Next.js app.
+First outbound hook events are intentionally minimal: `ride_started`, `ride_ended`, and manual `coach_check` from the Agent Controller panel. Physiological triggers like high HR and cadence collapse are later work.
+
+Repo-local agent instructions are available at `.agents/skills/kickr-local-coach/SKILL.md`.
 
 ## Further Development
 See `agents.md` for guidelines and instructions for LLMs (like Gemini) working on this project in the future.

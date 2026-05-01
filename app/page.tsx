@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Cog } from "lucide-react";
 import { getRiderProfile, RIDER_PROFILE, saveRiderProfile, type RiderProfile } from "@/lib/profile";
 import type { AgentCommand, AgentEvent } from "@/lib/agent";
+import { hookCoachCheck, hookRideEnded, hookRideStarted } from "@/lib/openclaw-hooks";
 import { WorkoutPlayer } from "@/components/workout-player";
 import { 
   RideSession, 
@@ -66,6 +67,7 @@ export default function App() {
   const activeWorkoutNameRef = useRef<string>("Manual Ride");
   const unsavedSamplesRef = useRef<any[]>([]);
   const pollingAgentCommandsRef = useRef(false);
+  const activeHookSessionRef = useRef<string | null>(null);
 
   useEffect(() => {
     getSavedRideSessions().then(setSessions);
@@ -214,6 +216,20 @@ export default function App() {
     ? riderProfile.hrZones.find(z => heartRate >= z.minBpm && heartRate <= z.maxBpm) 
     : undefined;
 
+  const getHookSnapshot = () => {
+    const samples = clientRef.current.samples;
+    const latestSample = samples.length > 0 ? samples[samples.length - 1] : undefined;
+
+    return {
+      activeTrainerMode,
+      latestSample,
+      workoutName: activeWorkoutNameRef.current,
+      sampleCount: samples.length,
+      connectionState,
+      hrConnectionState,
+    };
+  };
+
   async function connect() {
     try {
       setConnectionState("connecting");
@@ -240,6 +256,9 @@ export default function App() {
           }
         },
         () => {
+          const endedSessionId = activeHookSessionRef.current;
+          activeHookSessionRef.current = null;
+
           setConnectionState("disconnected");
           setPower(undefined);
           setCadence(undefined);
@@ -252,9 +271,21 @@ export default function App() {
             logSamples(unsavedSamplesRef.current, false);
             unsavedSamplesRef.current = [];
           }
+
+          if (endedSessionId) {
+            hookRideEnded(endedSessionId, {
+              ...getHookSnapshot(),
+              connectionState: "disconnected",
+            });
+          }
         }
       );
       setConnectionState("connected");
+      activeHookSessionRef.current = currentSessionFilenameRef.current;
+      hookRideStarted(currentSessionFilenameRef.current, {
+        ...getHookSnapshot(),
+        connectionState: "connected",
+      });
     } catch (e) {
       setConnectionState("disconnected");
       console.error(e);
@@ -882,6 +913,17 @@ export default function App() {
                 <p>{agentMessage}</p>
               </div>
             )}
+
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={connectionState !== "connected"}
+              onClick={() =>
+                hookCoachCheck(currentSessionFilenameRef.current, getHookSnapshot())
+              }
+            >
+              Request Coach Check
+            </Button>
 
             <div className="flex flex-col gap-2">
               {agentJournal.length === 0 ? (

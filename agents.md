@@ -80,6 +80,13 @@ Supported command payloads:
 - `GET /api/rider` returns the current rider profile.
 - `PUT /api/rider` updates the rider profile.
 
+### Outbound OpenClaw Hooks
+- Browser/client code calls `POST /api/agent/hooks/trigger`.
+- That route reads server-only `OPENCLAW_HOOKS_URL` and `OPENCLAW_HOOKS_TOKEN`.
+- First supported wake events: `ride_started`, `ride_ended`, and manual `coach_check`.
+- Keep `OPENCLAW_HOOKS_TOKEN` out of client components and client-imported modules.
+- Do not add high-HR, cadence-collapse, or power-target-missed triggers until the basic hook round trip works.
+
 ### Rider Profile
 The rider profile is seeded from `DEFAULT_RIDER_PROFILE` and stored in SQLite. It currently includes:
 - 4DP values: `nm`, `ac`, `map`, `ftp`

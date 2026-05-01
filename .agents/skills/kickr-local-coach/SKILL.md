@@ -24,6 +24,7 @@ App responsibilities:
 - Execute FTMS commands.
 - Persist sessions, samples, commands, events, and rider profile in SQLite.
 - Poll queued agent commands while the browser tab is open.
+- Forward app wakeups to OpenClaw/Hermes through `/api/agent/hooks/trigger` when hook env vars are configured.
 
 ## Local App Assumptions
 
@@ -69,6 +70,7 @@ When a fresh OpenClaw/Hermes agent is pointed at this repo, it should do exactly
    - rider profile reachable or not
    - recent events present or empty
    - whether `AGENT_COMMAND_TOKEN` appears required
+   - whether OpenClaw hook setup appears configured
 5. Then implement only Phase 1 below, or stop with a concrete patch plan if asked not to edit.
 
 Do not re-derive the architecture from scratch. Do not ask broad questions that this skill already answers.
@@ -76,6 +78,23 @@ Do not re-derive the architecture from scratch. Do not ask broad questions that 
 ## Phase 1: OpenClaw-Only Integration
 
 When asked to build the first OpenClaw/Hermes integration, do **not** edit the KICKR Next.js app. Treat it as a stable local service and implement only OpenClaw/Hermes-side behavior.
+
+If the user's instruction is brief, such as “use this skill” or “follow Phase 1,” assume this complete task:
+
+1. Read this skill and only the references needed for Phase 1.
+2. Smoke-check:
+   - `GET http://localhost:3000/api/rider`
+   - `GET http://localhost:3000/api/agent/events?limit=5`
+   - `POST http://localhost:3000/api/agent/commands` with a `send_message` command
+3. Implement or configure OpenClaw/Hermes-side support for:
+   - `/kickr_status`
+   - `/kickr_message <text>`
+   - `/kickr_set_erg <watts>`
+4. Test that:
+   - `/kickr_status` summarizes rider/live context
+   - `/kickr_message` appears in the KICKR app UI
+   - `/kickr_set_erg` queues a `set_erg_watts` command
+5. If something is missing, report the smallest required change, but do not modify the KICKR repo.
 
 Phase 1 goals:
 
@@ -104,16 +123,25 @@ Phase 1 non-goals:
 - no full `/kickr_plan_today`
 - no post-ride memory automation
 
-## Phase 2: Future KICKR App Wakeups
+## Phase 2: KICKR App Wakeups
 
-Only after Phase 1 works, a future KICKR app patch may add outbound hooks:
+The KICKR app includes the minimal outbound hook path:
 
-1. Add a server-side hook proxy route in the KICKR app.
-2. Keep `OPENCLAW_HOOKS_TOKEN` server-side.
-3. Add app events for `ride_started`, `ride_ended`, `rider_feedback`, and manual `coach_check`.
-4. Configure one mapped OpenClaw hook named `kickr`.
+1. Browser/client code calls `/api/agent/hooks/trigger`.
+2. The server route reads `OPENCLAW_HOOKS_URL` and `OPENCLAW_HOOKS_TOKEN`.
+3. The server forwards to the mapped OpenClaw hook.
+4. First app events: `ride_started`, `ride_ended`, and manual `coach_check`.
 
-Read [references/openclaw-hooks.md](references/openclaw-hooks.md) only for this phase.
+Phase 2 setup is guided by the OpenClaw/Hermes agent, not guessed:
+
+1. Discover or ask for the OpenClaw gateway port.
+2. Confirm hooks are enabled in OpenClaw config.
+3. Confirm or generate a dedicated hook token.
+4. Guide the user to set `OPENCLAW_HOOKS_URL` and `OPENCLAW_HOOKS_TOKEN` in `.env.local`.
+5. Tell the user to restart the Next.js dev server after changing `.env.local`.
+6. Verify `POST /api/agent/hooks/trigger` reaches `/hooks/kickr`.
+
+Read [references/openclaw-hooks.md](references/openclaw-hooks.md) for the exact setup checklist. Future trigger intelligence such as high-HR or cadence-collapse detection is still not implemented.
 
 ## Handling Prior Partial Attempts
 
