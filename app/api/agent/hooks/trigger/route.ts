@@ -17,10 +17,58 @@ function getHookMessage(payload: KickrHookEvent) {
   return `KICKR ${eventLabel}: read the local KICKR context APIs, then decide whether to send coaching text or queue a trainer command.`;
 }
 
-export async function POST(req: Request) {
-  const url = process.env.OPENCLAW_HOOKS_URL;
+function buildKickrPayload(payload: KickrHookEvent) {
+  return {
+    source: "kickr",
+    timestamp: Date.now(),
+    ...payload,
+    message: getHookMessage(payload),
+    instruction:
+      "Read KICKR context APIs, decide whether to coach or queue a command.",
+  };
+}
 
-  if (!url) {
+async function forwardToHermes(payload: KickrHookEvent) {
+  const baseUrl = process.env.HERMES_API_URL!.replace(/\/+$/, "");
+  const apiKey = process.env.HERMES_API_KEY;
+  const sessionId =
+    process.env.HERMES_KICKR_SESSION_ID || "kickr-local-coach";
+
+  const kickrPayload = buildKickrPayload(payload);
+
+  return fetch(`${baseUrl}/v1/runs`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+    },
+    body: JSON.stringify({
+      session_id: sessionId,
+      input: kickrPayload.message,
+      metadata: kickrPayload,
+    }),
+  });
+}
+
+async function forwardToOpenClaw(payload: KickrHookEvent) {
+  const url = process.env.OPENCLAW_HOOKS_URL!;
+  const token = process.env.OPENCLAW_HOOKS_TOKEN;
+
+  return fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(buildKickrPayload(payload)),
+  });
+}
+
+export async function POST(req: Request) {
+  const hermesUrl = process.env.HERMES_API_URL;
+  const openclawUrl = process.env.OPENCLAW_HOOKS_URL;
+
+  if (!hermesUrl && !openclawUrl) {
     return NextResponse.json({ skipped: true });
   }
 
@@ -30,36 +78,23 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid hook event" }, { status: 400 });
     }
 
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(process.env.OPENCLAW_HOOKS_TOKEN
-          ? { Authorization: `Bearer ${process.env.OPENCLAW_HOOKS_TOKEN}` }
-          : {}),
-      },
-      body: JSON.stringify({
-        source: "kickr",
-        timestamp: Date.now(),
-        ...payload,
-        message: getHookMessage(payload),
-        instruction:
-          "Read KICKR context APIs, decide whether to coach or queue a command.",
-      }),
-    });
+    const target = hermesUrl ? "hermes" : "openclaw";
+    const res = hermesUrl
+      ? await forwardToHermes(payload)
+      : await forwardToOpenClaw(payload);
 
     if (!res.ok) {
       return NextResponse.json(
-        { error: `OpenClaw hook returned ${res.status}` },
+        { error: `${target} hook returned ${res.status}` },
         { status: 502 }
       );
     }
 
-    return NextResponse.json({ sent: true });
+    return NextResponse.json({ sent: true, target });
   } catch (error) {
-    console.error("[openclaw-hooks] Failed to forward hook:", error);
+    console.error("[agent-hooks] Failed to forward hook:", error);
     return NextResponse.json(
-      { error: "Failed to forward OpenClaw hook" },
+      { error: "Failed to forward agent hook" },
       { status: 500 }
     );
   }

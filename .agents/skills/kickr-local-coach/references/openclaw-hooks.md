@@ -96,19 +96,23 @@ OPENCLAW_HOOKS_URL=http://127.0.0.1:<openclaw-port>/hooks/kickr
 OPENCLAW_HOOKS_TOKEN=<same-dedicated-hook-token>
 ```
 
+   And **comment out or remove any `HERMES_API_URL`** in the same file. If both are set, the route prefers Hermes and OpenClaw will never see the call.
+
 6. Tell the user to restart the Next.js dev server. Next.js does not reliably pick up `.env.local` changes without restart.
 
 7. Verify the no-browser route path:
 
 ```bash
-curl -X POST http://localhost:3000/api/agent/hooks/trigger \
+BASE_URL="$(portless get kickr 2>/dev/null || printf http://localhost:3000)"
+curl -X POST "$BASE_URL/api/agent/hooks/trigger" \
   -H "Content-Type: application/json" \
   -d '{"event":"coach_check","sessionId":null,"snapshot":{"source":"setup-smoke-test"}}'
 ```
 
 Expected result:
-- `{"sent":true}` when OpenClaw is reachable and accepts the hook.
-- `{"skipped":true}` when `OPENCLAW_HOOKS_URL` is unset.
+- `{"sent":true,"target":"openclaw"}` when OpenClaw is reachable and accepts the hook.
+- `{"sent":true,"target":"hermes"}` means `HERMES_API_URL` is also set and is winning — remove it if you want OpenClaw to handle this.
+- `{"skipped":true}` when neither `OPENCLAW_HOOKS_URL` nor `HERMES_API_URL` is set.
 - non-2xx means inspect OpenClaw hook config/token/path.
 
 ## OpenClaw Config Shape

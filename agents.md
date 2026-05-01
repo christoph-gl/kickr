@@ -46,9 +46,23 @@ Communication relies heavily on the **Web Bluetooth API** (`navigator.bluetooth`
 
 ## Local Agent / LLM Control Architecture
 
-The current architecture intentionally does **not** expose an MCP server. The browser remains the Bluetooth owner and the Next.js app exposes small local HTTP endpoints for local agents like OpenClaw or Hermes.
+The architecture intentionally does **not** expose an MCP server. The browser remains the Bluetooth owner and the Next.js app exposes small local HTTP endpoints for local agents like OpenClaw or Hermes.
 
-Repo-local integration guidance for fresh OpenClaw/Hermes agents lives in `.agents/skills/kickr-local-coach/SKILL.md`. Phase 1 is OpenClaw-only: do not edit the KICKR Next.js app; use the existing local APIs as a stable service.
+### Three layers, three audiences
+
+| Layer | Lives in | Audience | Read when |
+| --- | --- | --- | --- |
+| **App internals** (FTMS, SQLite, Web Bluetooth, workout player) | `agents.md`, `lib/`, `components/` | Someone editing the KICKR app itself | Code changes |
+| **One-time setup** (env vars, gateway config, smoke tests) | `.agents/skills/kickr-local-coach/references/*.md` | Agent doing first-time install | Once per machine, plus troubleshooting |
+| **Operating contract** (endpoints, command shapes, hook payloads, coaching loop) | `.agents/skills/kickr-local-coach/dist/agent-skill.<agent>.md` | The running agent | Every coaching turn |
+
+External agents are expected to **install** the lean per-agent skill from `.agents/skills/kickr-local-coach/dist/` into their own workspace once, then operate without re-reading this repo. Install flow: [`.agents/skills/kickr-local-coach/INSTALL.md`](.agents/skills/kickr-local-coach/INSTALL.md). Authoring guidance for the skill itself: `.agents/skills/kickr-local-coach/SKILL.md`. Each `dist/agent-skill.*.md` carries a `kickr-skill-version` line; bump it when the operating contract changes so installed copies can detect drift.
+
+Phase 1 is agent-only: do not edit the KICKR Next.js app; use the existing local APIs as a stable service.
+
+### Base URL
+
+When the app is started with Portless, prefer the stable project URL `https://kickr.localhost`. Discover it with `portless get kickr`. If Portless is not running or the HTTPS certificate is not trusted by the calling process, fall back to the direct dev-server URL such as `http://localhost:3000`.
 
 ### Browser Ownership
 - The browser tab owns Web Bluetooth and sends FTMS commands.
@@ -84,11 +98,15 @@ Use `set_erg_watts` and `set_resistance` as the canonical trainer-control comman
 - `GET /api/rider` returns the current rider profile.
 - `PUT /api/rider` updates the rider profile.
 
-### Outbound OpenClaw Hooks
+### Outbound Agent Wakeups
 - Browser/client code calls `POST /api/agent/hooks/trigger`.
-- That route reads server-only `OPENCLAW_HOOKS_URL` and `OPENCLAW_HOOKS_TOKEN`.
-- First supported wake events: `ride_started`, `ride_ended`, and manual `coach_check`.
-- Keep `OPENCLAW_HOOKS_TOKEN` out of client components and client-imported modules.
+- The route picks an adapter from server-only env vars. Set exactly one backend:
+  - **Hermes** (preferred when Hermes API Server is enabled): `HERMES_API_URL`, `HERMES_API_KEY`, `HERMES_KICKR_SESSION_ID`. The route forwards to `${HERMES_API_URL}/v1/runs` with `Authorization: Bearer ${HERMES_API_KEY}` and a body of `{session_id, input, metadata}` where `metadata` carries the full KICKR payload.
+  - **OpenClaw**: `OPENCLAW_HOOKS_URL`, `OPENCLAW_HOOKS_TOKEN`. The route forwards the KICKR payload to the mapped `/hooks/kickr` endpoint with `Authorization: Bearer ${OPENCLAW_HOOKS_TOKEN}`.
+- If both are set, Hermes takes precedence. If neither is set, the route returns `{skipped: true}` and never throws.
+- First supported wake events: `ride_started`, `ride_ended`, `rider_feedback`, manual `coach_check`.
+- Keep hook tokens out of client components and client-imported modules.
+- Restart `next dev` after editing `.env.local`; Next.js does not pick up env changes via hot reload.
 - Do not add high-HR, cadence-collapse, or power-target-missed triggers until the basic hook round trip works.
 
 ### Rider Profile
@@ -123,5 +141,4 @@ The settings cog in the app opens a modal for manual profile editing. Future LLM
 - **Workout Builder UI:** Create a drag-and-drop timeline UI where a user can manually construct custom workouts without needing to write JSON or import ZWO files.
 - **Live Telemetry Charting:** Use a charting library (like Recharts, which is compatible with shadcn/ui) to plot actual live Power/Cadence/HR data as the ride progresses, overlaying it on top of the planned workout chart.
 - **Save Workouts via Database:** Imported/saved workouts still use JSON files under `workouts/`; consider moving them behind SQLite later.
-- **OpenClaw/Hermes Integration:** Add a local OpenClaw skill or slash command that reads `/api/rider`, `/api/sessions`, and `/api/agent/events`, then writes commands to `/api/agent/commands`.
-  - Phase 1 should happen outside this repo in OpenClaw/Hermes. A later Phase 2 may add KICKR app -> OpenClaw outbound hooks using a server-side hook proxy.
+- **OpenClaw/Hermes Integration:** Phase 1 (agent installs the skill, reads context, queues commands) and Phase 2 (KICKR app -> agent wakeups via the dual adapter route) are wired. Future work: bump `kickr-skill-version` whenever the contract changes, add player commands (select/start/pause workout), and only then add physiological triggers (high HR, cadence collapse, power-target-missed).

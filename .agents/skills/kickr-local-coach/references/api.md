@@ -1,15 +1,22 @@
 # KICKR App API Reference
 
-Base URL defaults to `http://localhost:3000`.
+Preferred base URL is `https://kickr.localhost` when Portless is running. Discover it with:
+
+```bash
+portless get kickr
+```
+
+Fallback base URL is `http://localhost:3000` when the app is run with plain `npm run dev`.
 
 ## First Smoke Test
 
 Before building a larger integration, verify:
 
 ```bash
-curl http://localhost:3000/api/rider
-curl 'http://localhost:3000/api/agent/events?limit=5'
-curl -X POST http://localhost:3000/api/agent/commands \
+BASE_URL="$(portless get kickr 2>/dev/null || printf http://localhost:3000)"
+curl "$BASE_URL/api/rider"
+curl "$BASE_URL/api/agent/events?limit=5"
+curl -X POST "$BASE_URL/api/agent/commands" \
   -H "Content-Type: application/json" \
   -d '{"type":"send_message","text":"KICKR agent bridge connected","reason":"integration smoke test"}'
 ```
@@ -115,7 +122,8 @@ Use the exact command names above. The app accepts these compatibility fallbacks
 Example:
 
 ```bash
-curl -X POST http://localhost:3000/api/agent/commands \
+BASE_URL="$(portless get kickr 2>/dev/null || printf http://localhost:3000)"
+curl -X POST "$BASE_URL/api/agent/commands" \
   -H "Content-Type: application/json" \
   -d '{"type":"set_erg_watts","watts":220,"reason":"HR is steady"}'
 ```
@@ -123,7 +131,8 @@ curl -X POST http://localhost:3000/api/agent/commands \
 After a trainer command, verify it with:
 
 ```bash
-curl 'http://localhost:3000/api/agent/events?limit=10'
+BASE_URL="$(portless get kickr 2>/dev/null || printf http://localhost:3000)"
+curl "$BASE_URL/api/agent/events?limit=10"
 ```
 
 Look for `command_received`, then `command_applied`, then a newer `ride_snapshot.activeTrainerMode` showing the requested ERG watts or resistance level. If you see `command_failed` with `Not connected`, a stale/disconnected tab likely consumed the command or the trainer connection dropped.

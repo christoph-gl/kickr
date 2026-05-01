@@ -36,20 +36,43 @@ A Next.js, TypeScript, and React-based web application that connects directly to
    AI_GATEWAY_MODEL=google/gemini-3-flash
    ```
 
-   Optional OpenClaw/Hermes outbound hooks:
+   Optional outbound agent wakeups. Configure **one** backend in `.env.local`. If both are set, Hermes wins.
+
+   Hermes (uses the Hermes API Server, requires `API_SERVER_ENABLED=true` in `~/.hermes/.env` and a running `hermes gateway`):
+   ```
+   HERMES_API_URL=http://127.0.0.1:8642
+   HERMES_API_KEY=<API_SERVER_KEY from ~/.hermes/.env>
+   HERMES_KICKR_SESSION_ID=kickr-local-coach
+   ```
+
+   OpenClaw (uses a mapped HTTP hook at `/hooks/kickr`):
    ```
    OPENCLAW_HOOKS_URL=http://127.0.0.1:<openclaw-port>/hooks/kickr
    OPENCLAW_HOOKS_TOKEN=replace-with-dedicated-hook-token
    ```
+
+   Restart `next dev` after editing `.env.local` — Next.js only reads env vars at server start.
 
 3. Run the development server:
    ```bash
    npm run dev
    ```
 
+   Or run through Portless for a stable HTTPS project URL:
+   ```bash
+   npm run dev:portless
+   ```
+
 4. Open [http://localhost:3000](http://localhost:3000) with your browser.
 
+   With Portless, open [https://kickr.localhost](https://kickr.localhost). The project name comes from `package.json`, and agents can discover the URL with:
+   ```bash
+   npx portless get kickr
+   ```
+
 > **Note:** Web Bluetooth requires a secure context (HTTPS) or `localhost`. It is currently fully supported in **Chrome** and **Edge**. Ensure no other apps (like Zwift or Wahoo app) are actively connected to your trainer, as they typically only accept one active Bluetooth control connection at a time.
+>
+> Portless command note: use `npm run dev:portless`, `npx portless`, or `npx portless run next dev --turbopack`. Do not use `portless run dev`; that tries to execute a shell command named `dev` instead of the npm script.
 
 ## Technology Stack
 - Next.js (App Router)
@@ -69,10 +92,12 @@ The app polls `GET /api/agent/commands` every 3 seconds only while the tab is co
 Queue an ERG command:
 
 ```bash
-curl -X POST http://localhost:3000/api/agent/commands \
+curl -X POST https://kickr.localhost/api/agent/commands \
   -H "Content-Type: application/json" \
   -d '{"type":"set_erg_watts","watts":220,"reason":"HR is steady; lift the target."}'
 ```
+
+If you are not using Portless, replace `https://kickr.localhost` with `http://localhost:3000`.
 
 Supported command types:
 
@@ -89,19 +114,19 @@ Use `set_erg_watts` as the canonical ERG command. The browser also accepts `{"ty
 Read recent agent/ride events:
 
 ```bash
-curl http://localhost:3000/api/agent/events?limit=200
+curl https://kickr.localhost/api/agent/events?limit=200
 ```
 
 Read rider context:
 
 ```bash
-curl http://localhost:3000/api/rider
+curl https://kickr.localhost/api/rider
 ```
 
 Read saved sessions:
 
 ```bash
-curl http://localhost:3000/api/sessions
+curl https://kickr.localhost/api/sessions
 ```
 
 For the later OpenClaw/Hermes step, point the local agent at this command endpoint and read live ride context from `GET /api/agent/events?limit=200`, rider context from `GET /api/rider`, and history from `GET /api/sessions`. If you set `AGENT_COMMAND_TOKEN`, external callers must include `Authorization: Bearer <token>`.
@@ -128,16 +153,43 @@ The rider profile is seeded from the original static profile and now includes:
 
 Use the cog button in the top right of the app to edit these values manually.
 
-## Current Agent Boundary
+## Local Agent Architecture
 
-The project has a two-way local agent bridge:
+The browser owns Bluetooth. External agents (Hermes, OpenClaw, ...) operate through local HTTP — they never speak FTMS or talk to the trainer directly. Two directions:
 
-- OpenClaw/Hermes -> KICKR: write commands to `POST /api/agent/commands`.
-- KICKR -> OpenClaw/Hermes: browser calls `POST /api/agent/hooks/trigger`, and the server forwards to `OPENCLAW_HOOKS_URL` with `OPENCLAW_HOOKS_TOKEN`.
+- **Agent -> KICKR:** queue commands via `POST /api/agent/commands`. Read context via `GET /api/rider`, `GET /api/sessions`, `GET /api/agent/events?limit=200`.
+- **KICKR -> agent wakeups:** the browser calls `POST /api/agent/hooks/trigger`. The server route picks an adapter from env vars:
+  - `HERMES_API_URL` (+ `HERMES_API_KEY`, `HERMES_KICKR_SESSION_ID`) -> `POST ${HERMES_API_URL}/v1/runs` with `{session_id, input, metadata}` (preferred when Hermes API Server is enabled).
+  - `OPENCLAW_HOOKS_URL` (+ `OPENCLAW_HOOKS_TOKEN`) -> mapped OpenClaw `/hooks/kickr`.
+  - Hermes wins if both are set. Neither set -> the route returns `{skipped: true}` and never throws.
 
-First outbound hook events are intentionally minimal: `ride_started`, `ride_ended`, and manual `coach_check` from the Agent Controller panel. Physiological triggers like high HR and cadence collapse are later work.
+Initial wake events are intentionally minimal: `ride_started`, `ride_ended`, `rider_feedback`, and manual `coach_check` from the Agent Controller panel. Physiological triggers (high HR, cadence collapse) are later work.
 
-Repo-local agent instructions are available at `.agents/skills/kickr-local-coach/SKILL.md`.
+### Install-once skill model
+
+External agents do not operate by reading this repo on every coaching turn. They install a lean per-agent skill into their own workspace once and operate from there:
+
+```
+.agents/skills/kickr-local-coach/
+├── INSTALL.md                   ← read this first when an agent is pointed at the repo
+├── dist/
+│   ├── agent-skill.hermes.md    ← copy into ~/.hermes/skills/kickr-local-coach/SKILL.md
+│   └── agent-skill.openclaw.md  ← copy into ~/.openclaw/skills/kickr-local-coach/SKILL.md
+└── references/
+    ├── api.md                   ← endpoint reference
+    ├── hermes-hooks.md          ← one-time Hermes wiring
+    └── openclaw-hooks.md        ← one-time OpenClaw wiring
+```
+
+What lives where:
+
+- **Hot path** (in the installed skill, ~1–2 screens): endpoints, command shapes, hook payload, coaching loop, slash commands, "don't" rules. Self-contained — no repo fetches at runtime.
+- **Cold path** (in `references/`): env-var wiring, gateway config, smoke tests. Read once during install, then forgotten.
+- **Not in the skill at all**: FTMS opcodes, SQLite schema, Web Bluetooth, workout player internals. Those live in `agents.md` for someone editing the app.
+
+Each `dist/agent-skill.*.md` starts with a `kickr-skill-version` line. Bump it whenever the operating contract changes; installed copies use it to detect drift and re-install.
+
+Workflow: agent points at repo once → reads [`INSTALL.md`](./.agents/skills/kickr-local-coach/INSTALL.md) → if the KICKR app isn't running yet, walks the user through Step 0 (clone, `npm install`, `.env.local`, `npm run dev`) → copies the right `dist/*.md` into its own skills dir → does env wiring from `references/` → never opens this repo again until version bumps.
 
 ## Further Development
 See `agents.md` for guidelines and instructions for LLMs (like Gemini) working on this project in the future.
