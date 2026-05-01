@@ -20,6 +20,7 @@ A Next.js, TypeScript, and React-based web application that connects directly to
 - **Rider Profile Management:** Configure and store your Neuromuscular Power (NM), Anaerobic Capacity (AC), Maximal Aerobic Power (MAP), Functional Threshold Power (FTP), and Cycling Threshold Heart Rate (cTHR) zones.
 - **Data Export:** Download a `.csv` record of your ride telemetry containing timestamps, power, cadence, speed, heart rate, and resistance level.
 - **Local Agent Control Bridge:** Queue local agent commands through `/api/agent/commands`, apply them in the browser-owned Bluetooth session, and persist ride snapshots plus command outcomes to SQLite.
+- **SQLite-backed Rider Context:** Store FTP/4DP, HR zones, age, weight, gender, and an LLM-ready rider memory summary in `.data/kickr.sqlite`.
 
 ## Getting Started
 
@@ -55,7 +56,11 @@ A Next.js, TypeScript, and React-based web application that connects directly to
 
 ## Local Agent Bridge
 
-The browser remains the Bluetooth owner, but a local agent can enqueue commands through the Next.js server:
+The browser remains the Bluetooth owner. A local agent such as OpenClaw or Hermes should enqueue high-level commands through the Next.js server; the browser tab polls the command inbox and applies commands through the existing Web Bluetooth client.
+
+The app polls `GET /api/agent/commands` every 3 seconds while open, so repeated request lines in dev logs are normal.
+
+Queue an ERG command:
 
 ```bash
 curl -X POST http://localhost:3000/api/agent/commands \
@@ -63,9 +68,37 @@ curl -X POST http://localhost:3000/api/agent/commands \
   -d '{"type":"set_erg_watts","watts":220,"reason":"HR is steady; lift the target."}'
 ```
 
-Supported command types are `set_erg_watts`, `set_resistance`, `send_message`, `start_trainer`, and `stop_trainer`. When a trainer tab is open, it polls the command inbox and applies commands directly.
+Supported command types:
+
+```json
+{"type":"set_erg_watts","watts":220,"reason":"HR is steady"}
+{"type":"set_resistance","percent":35,"reason":"Free ride push"}
+{"type":"send_message","text":"Hold this effort for two more minutes"}
+{"type":"start_trainer"}
+{"type":"stop_trainer"}
+```
+
+Read recent agent/ride events:
+
+```bash
+curl http://localhost:3000/api/agent/events?limit=200
+```
+
+Read rider context:
+
+```bash
+curl http://localhost:3000/api/rider
+```
+
+Read saved sessions:
+
+```bash
+curl http://localhost:3000/api/sessions
+```
 
 For the later OpenClaw/Hermes step, point the local agent at this command endpoint and read live ride context from `GET /api/agent/events?limit=200`, rider context from `GET /api/rider`, and history from `GET /api/sessions`. If you set `AGENT_COMMAND_TOKEN`, external callers must include `Authorization: Bearer <token>`.
+
+The agent should send structured intent such as “set ERG to 240 W,” not FTMS bytes. FTMS encoding stays inside `lib/kickr-client.ts`.
 
 ## SQLite Persistence
 
@@ -73,7 +106,26 @@ Runtime data is stored in `.data/kickr.sqlite`, which is intentionally ignored b
 
 The browser still keeps a localStorage fallback for existing history and offline resilience. On first load, if SQLite has no sessions but localStorage does, the app backfills those sessions into SQLite.
 
-The rider profile is seeded from the original static profile and now includes 4DP values, cycling threshold heart rate, HR zones, age, weight, gender, and a future `memorySummary` field for LLM-updated ride/performance notes.
+The rider profile is seeded from the original static profile and now includes:
+
+- 4DP values: NM, AC, MAP, FTP
+- cycling threshold heart rate (`cTHR`)
+- heart-rate zones
+- age
+- weight in kg
+- gender (`male`, `female`, or unset)
+- `memorySummary` for future LLM-updated ride/performance notes
+
+Use the cog button in the top right of the app to edit these values manually.
+
+## Current Agent Boundary
+
+The project currently has the Next.js-side agent bridge only. The next OpenClaw/Hermes work should likely be:
+
+1. Add an OpenClaw skill or slash command to start a coaching session.
+2. Read `GET /api/rider`, `GET /api/sessions`, and `GET /api/agent/events?limit=...`.
+3. Periodically produce coaching messages or commands by writing to `POST /api/agent/commands`.
+4. After a completed ride, summarize useful learning into `rider_profile.memorySummary` through `PUT /api/rider`.
 
 ## Further Development
 See `agents.md` for guidelines and instructions for LLMs (like Gemini) working on this project in the future.
