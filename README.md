@@ -127,5 +127,7 @@ The project currently has the Next.js-side agent bridge only. The next OpenClaw/
 3. Periodically produce coaching messages or commands by writing to `POST /api/agent/commands`.
 4. After a completed ride, summarize useful learning into `rider_profile.memorySummary` through `PUT /api/rider`.
 
+Repo-local agent instructions are available at `.agents/skills/kickr-local-coach/SKILL.md`. For a fresh OpenClaw/Hermes pass, start with that skill's Fresh Agent Discovery Script. Phase 1 is OpenClaw-only and should not edit the KICKR Next.js app.
+
 ## Further Development
 See `agents.md` for guidelines and instructions for LLMs (like Gemini) working on this project in the future.

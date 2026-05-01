@@ -48,6 +48,8 @@ Communication relies heavily on the **Web Bluetooth API** (`navigator.bluetooth`
 
 The current architecture intentionally does **not** expose an MCP server. The browser remains the Bluetooth owner and the Next.js app exposes small local HTTP endpoints for local agents like OpenClaw or Hermes.
 
+Repo-local integration guidance for fresh OpenClaw/Hermes agents lives in `.agents/skills/kickr-local-coach/SKILL.md`. Phase 1 is OpenClaw-only: do not edit the KICKR Next.js app; use the existing local APIs as a stable service.
+
 ### Browser Ownership
 - The browser tab owns Web Bluetooth and sends FTMS commands.
 - External agents should not attempt to talk directly to the trainer.
@@ -111,3 +113,4 @@ The settings cog in the app opens a modal for manual profile editing. Future LLM
 - **Live Telemetry Charting:** Use a charting library (like Recharts, which is compatible with shadcn/ui) to plot actual live Power/Cadence/HR data as the ride progresses, overlaying it on top of the planned workout chart.
 - **Save Workouts via Database:** Imported/saved workouts still use JSON files under `workouts/`; consider moving them behind SQLite later.
 - **OpenClaw/Hermes Integration:** Add a local OpenClaw skill or slash command that reads `/api/rider`, `/api/sessions`, and `/api/agent/events`, then writes commands to `/api/agent/commands`.
+  - Phase 1 should happen outside this repo in OpenClaw/Hermes. A later Phase 2 may add KICKR app -> OpenClaw outbound hooks using a server-side hook proxy.
