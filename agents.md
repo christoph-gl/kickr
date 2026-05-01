@@ -54,7 +54,8 @@ Repo-local integration guidance for fresh OpenClaw/Hermes agents lives in `.agen
 - The browser tab owns Web Bluetooth and sends FTMS commands.
 - External agents should not attempt to talk directly to the trainer.
 - Agent control is applied by polling `/api/agent/commands` from the browser and then calling existing KICKR client methods.
-- Polling currently happens every 3 seconds. Repeated `GET /api/agent/commands` lines in dev logs are expected while the app is open.
+- Polling currently happens every 3 seconds only from a tab whose trainer connection state is `connected`. Repeated `GET /api/agent/commands` lines in dev logs are expected during an active connection.
+- Disconnected or stale browser tabs must not consume trainer commands. If command execution looks wrong, compare `command_received` / `command_applied` / `command_failed` session ids with the latest `ride_snapshot.sessionId`.
 
 ### Agent Command Endpoint
 - `POST /api/agent/commands` queues commands.
@@ -72,10 +73,13 @@ Supported command payloads:
 {"type":"stop_trainer"}
 ```
 
+Use `set_erg_watts` and `set_resistance` as the canonical trainer-control commands. The app accepts `{"type":"set_trainer_mode","mode":"erg","targetWatts":220}` and `{"type":"set_trainer_mode","mode":"resistance","percent":35}` as compatibility fallbacks, but fresh agents should not invent new command shapes.
+
 ### Agent Event / Context Endpoints
 - `POST /api/agent/events` stores structured agent/ride events in SQLite.
 - `GET /api/agent/events?limit=200` returns recent agent events, newest first.
 - Ride snapshots include telemetry, active trainer mode, workout name, sample count, and the current `riderProfile`.
+- After queueing a trainer command, verify a later `ride_snapshot.activeTrainerMode` changed as expected, not only that the command was queued.
 - `GET /api/sessions` returns saved ride sessions with samples and metrics.
 - `GET /api/rider` returns the current rider profile.
 - `PUT /api/rider` updates the rider profile.

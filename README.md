@@ -62,9 +62,9 @@ A Next.js, TypeScript, and React-based web application that connects directly to
 
 ## Local Agent Bridge
 
-The browser remains the Bluetooth owner. A local agent such as OpenClaw or Hermes should enqueue high-level commands through the Next.js server; the browser tab polls the command inbox and applies commands through the existing Web Bluetooth client.
+The browser remains the Bluetooth owner. A local agent such as OpenClaw or Hermes should enqueue high-level commands through the Next.js server; the browser tab with the active trainer connection polls the command inbox and applies commands through the existing Web Bluetooth client.
 
-The app polls `GET /api/agent/commands` every 3 seconds while open, so repeated request lines in dev logs are normal.
+The app polls `GET /api/agent/commands` every 3 seconds only while the tab is connected to the trainer, so repeated request lines in dev logs are normal during an active connection. Disconnected or stale tabs should not consume trainer commands.
 
 Queue an ERG command:
 
@@ -83,6 +83,8 @@ Supported command types:
 {"type":"start_trainer"}
 {"type":"stop_trainer"}
 ```
+
+Use `set_erg_watts` as the canonical ERG command. The browser also accepts `{"type":"set_trainer_mode","mode":"erg","targetWatts":220}` as a compatibility fallback for agents that already emit that shape, but fresh integrations should prefer `set_erg_watts`.
 
 Read recent agent/ride events:
 
@@ -105,6 +107,8 @@ curl http://localhost:3000/api/sessions
 For the later OpenClaw/Hermes step, point the local agent at this command endpoint and read live ride context from `GET /api/agent/events?limit=200`, rider context from `GET /api/rider`, and history from `GET /api/sessions`. If you set `AGENT_COMMAND_TOKEN`, external callers must include `Authorization: Bearer <token>`.
 
 The agent should send structured intent such as “set ERG to 240 W,” not FTMS bytes. FTMS encoding stays inside `lib/kickr-client.ts`.
+
+When testing trainer commands, confirm both `command_applied` and a following `ride_snapshot.activeTrainerMode` change. If a command is consumed by a stale tab, the event log will show a different session id or a `command_failed` event such as `Not connected`.
 
 ## SQLite Persistence
 

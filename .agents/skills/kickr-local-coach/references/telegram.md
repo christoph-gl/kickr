@@ -34,6 +34,8 @@ Implement only these first:
 
 `/kickr_set_erg 220`
 - Queue `{"type":"set_erg_watts","watts":220,"reason":"Telegram command"}`.
+- Then read `GET /api/agent/events?limit=10` and report whether a later `ride_snapshot.activeTrainerMode` shows `{"type":"erg","watts":220}`.
+- If the command stays queued or fails with `Not connected`, tell the rider to keep exactly one KICKR browser tab connected to the trainer.
 
 `/kickr_message ...`
 - Queue `{"type":"send_message","text":"..."}`.

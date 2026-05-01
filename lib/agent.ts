@@ -16,6 +16,21 @@ export type AgentCommand =
     }
   | {
       id?: string;
+      type: "set_trainer_mode";
+      mode: "erg";
+      targetWatts: number;
+      reason?: string;
+    }
+  | {
+      id?: string;
+      type: "set_trainer_mode";
+      mode: "resistance";
+      percent?: number;
+      level?: number;
+      reason?: string;
+    }
+  | {
+      id?: string;
       type: "send_message";
       text: string;
       reason?: string;

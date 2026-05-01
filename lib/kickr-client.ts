@@ -109,7 +109,7 @@ export class KickrCore2Client {
     view.setUint8(0, 0x04);
     view.setInt16(1, raw, true);
 
-    await this.control!.writeValueWithResponse(buffer);
+    await this.writeControl([...new Uint8Array(buffer)]);
   }
 
   async setTargetPower(watts: number) {
@@ -121,7 +121,7 @@ export class KickrCore2Client {
     view.setUint8(0, 0x05);
     view.setInt16(1, Math.round(watts), true);
 
-    await this.control!.writeValueWithResponse(buffer);
+    await this.writeControl([...new Uint8Array(buffer)]);
   }
 }
 

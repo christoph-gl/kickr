@@ -12,6 +12,11 @@ function isKnownHookEvent(payload: KickrHookEvent) {
   );
 }
 
+function getHookMessage(payload: KickrHookEvent) {
+  const eventLabel = payload.event.replaceAll("_", " ");
+  return `KICKR ${eventLabel}: read the local KICKR context APIs, then decide whether to send coaching text or queue a trainer command.`;
+}
+
 export async function POST(req: Request) {
   const url = process.env.OPENCLAW_HOOKS_URL;
 
@@ -37,6 +42,7 @@ export async function POST(req: Request) {
         source: "kickr",
         timestamp: Date.now(),
         ...payload,
+        message: getHookMessage(payload),
         instruction:
           "Read KICKR context APIs, decide whether to coach or queue a command.",
       }),

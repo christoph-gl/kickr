@@ -23,7 +23,7 @@ App responsibilities:
 - Decode telemetry.
 - Execute FTMS commands.
 - Persist sessions, samples, commands, events, and rider profile in SQLite.
-- Poll queued agent commands while the browser tab is open.
+- Poll queued agent commands only while the browser tab has an active trainer connection.
 - Forward app wakeups to OpenClaw/Hermes through `/api/agent/hooks/trigger` when hook env vars are configured.
 
 ## Local App Assumptions
@@ -94,6 +94,7 @@ If the user's instruction is brief, such as “use this skill” or “follow Ph
    - `/kickr_status` summarizes rider/live context
    - `/kickr_message` appears in the KICKR app UI
    - `/kickr_set_erg` queues a `set_erg_watts` command
+   - a later ride snapshot reports the requested `activeTrainerMode`
 5. If something is missing, report the smallest required change, but do not modify the KICKR repo.
 
 Phase 1 goals:
@@ -112,6 +113,7 @@ Phase 1 goals:
    - read recent events
    - queue a `send_message`
    - optionally queue a low-watt ERG command if the user approves
+   - verify ERG by reading a later `ride_snapshot.activeTrainerMode`, not only the queue response
 
 Phase 1 non-goals:
 - no edits to `app/`, `components/`, or `lib/` in the KICKR repo

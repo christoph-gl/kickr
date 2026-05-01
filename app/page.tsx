@@ -113,6 +113,12 @@ export default function App() {
   const describeAgentCommand = (command: AgentCommand) => {
     if (command.type === "set_erg_watts") return `Set ERG to ${command.watts} W`;
     if (command.type === "set_resistance") return `Set resistance to ${command.percent}%`;
+    if (command.type === "set_trainer_mode" && command.mode === "erg") {
+      return `Set ERG to ${command.targetWatts} W`;
+    }
+    if (command.type === "set_trainer_mode" && command.mode === "resistance") {
+      return `Set resistance to ${command.percent ?? command.level}%`;
+    }
     if (command.type === "send_message") return command.text;
     if (command.type === "start_trainer") return "Start trainer";
     if (command.type === "stop_trainer") return "Stop trainer";
@@ -377,12 +383,26 @@ export default function App() {
         await setTrainerTargetPower(command.watts);
       } else if (command.type === "set_resistance") {
         await setTrainerResistance(command.percent);
+      } else if (command.type === "set_trainer_mode" && command.mode === "erg") {
+        if (typeof command.targetWatts !== "number") {
+          throw new Error("set_trainer_mode erg requires targetWatts");
+        }
+        await setTrainerTargetPower(command.targetWatts);
+      } else if (command.type === "set_trainer_mode" && command.mode === "resistance") {
+        const level = typeof command.percent === "number" ? command.percent : command.level;
+        if (typeof level !== "number") {
+          throw new Error("set_trainer_mode resistance requires percent or level");
+        }
+        await setTrainerResistance(level);
       } else if (command.type === "send_message") {
         setAgentMessage(command.text);
       } else if (command.type === "start_trainer") {
         await clientRef.current.start();
       } else if (command.type === "stop_trainer") {
         await clientRef.current.stop();
+      } else {
+        const unsupported = command as { type?: string };
+        throw new Error(`Unsupported agent command: ${unsupported.type ?? "unknown"}`);
       }
 
       updateAgentJournal(command, "applied");
@@ -406,8 +426,12 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (connectionState !== "connected") return;
+
     const pollAgentCommands = async () => {
       if (pollingAgentCommandsRef.current) return;
+      if (!clientRef.current.isConnected) return;
+
       pollingAgentCommandsRef.current = true;
 
       try {
@@ -431,7 +455,7 @@ export default function App() {
     pollAgentCommands();
 
     return () => window.clearInterval(interval);
-  }, []);
+  }, [connectionState]);
 
   useEffect(() => {
     if (connectionState !== "connected") return;

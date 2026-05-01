@@ -177,6 +177,11 @@ export async function sendOpenClawHook(payload: KickrHookEvent) {
 Server route forwarding shape:
 
 ```ts
+function getHookMessage(payload: KickrHookEvent) {
+  const eventLabel = payload.event.replaceAll("_", " ");
+  return `KICKR ${eventLabel}: read the local KICKR context APIs, then decide whether to send coaching text or queue a trainer command.`;
+}
+
 export async function POST(req: Request) {
   const url = process.env.OPENCLAW_HOOKS_URL;
   if (!url) return Response.json({ skipped: true });
@@ -190,7 +195,12 @@ export async function POST(req: Request) {
         ? { Authorization: `Bearer ${process.env.OPENCLAW_HOOKS_TOKEN}` }
         : {}),
     },
-    body: JSON.stringify({ source: "kickr", timestamp: Date.now(), ...payload }),
+    body: JSON.stringify({
+      source: "kickr",
+      timestamp: Date.now(),
+      ...payload,
+      message: getHookMessage(payload),
+    }),
   });
 
   return Response.json({ sent: true });
@@ -209,6 +219,7 @@ A useful payload includes:
   "event": "coach_check",
   "timestamp": 1777600000000,
   "sessionId": "ride-1777600000000",
+  "message": "KICKR coach check: read the local KICKR context APIs, then decide whether to send coaching text or queue a trainer command.",
   "snapshot": {
     "activeTrainerMode": {"type": "erg", "watts": 210},
     "latestSample": {"powerW": 208, "cadenceRpm": 88, "heartRateBpm": 171},

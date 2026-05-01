@@ -14,7 +14,7 @@ curl -X POST http://localhost:3000/api/agent/commands \
   -d '{"type":"send_message","text":"KICKR agent bridge connected","reason":"integration smoke test"}'
 ```
 
-If the browser tab is open, the message should appear in the app's Agent Controller panel.
+If a browser tab is connected to the trainer, the message should appear in the app's Agent Controller panel. If no tab is connected, the command remains queued until a connected tab consumes it.
 
 ## Rider Context
 
@@ -89,7 +89,9 @@ GET /api/agent/commands
 GET /api/agent/commands?consume=false
 ```
 
-The browser tab polls `GET /api/agent/commands` every 3 seconds and applies queued commands. This is expected behavior.
+The browser tab polls `GET /api/agent/commands` every 3 seconds and applies queued commands. This is expected behavior during an active trainer connection.
+
+Only the browser tab with `connectionState: "connected"` should consume commands. Disconnected or stale tabs should not poll the consuming endpoint, because they do not own a live Bluetooth control characteristic.
 
 Supported commands:
 
@@ -103,6 +105,13 @@ Supported commands:
 
 Use `send_message`, `set_erg_watts`, and `set_resistance` for the first integration. Treat `start_trainer` and `stop_trainer` as lower-level trainer commands, not workout-player controls.
 
+Use the exact command names above. The app accepts these compatibility fallbacks, but fresh agents should queue the canonical commands so behavior stays predictable:
+
+```json
+{"type":"set_trainer_mode","mode":"erg","targetWatts":220}
+{"type":"set_trainer_mode","mode":"resistance","percent":35}
+```
+
 Example:
 
 ```bash
@@ -110,6 +119,14 @@ curl -X POST http://localhost:3000/api/agent/commands \
   -H "Content-Type: application/json" \
   -d '{"type":"set_erg_watts","watts":220,"reason":"HR is steady"}'
 ```
+
+After a trainer command, verify it with:
+
+```bash
+curl 'http://localhost:3000/api/agent/events?limit=10'
+```
+
+Look for `command_received`, then `command_applied`, then a newer `ride_snapshot.activeTrainerMode` showing the requested ERG watts or resistance level. If you see `command_failed` with `Not connected`, a stale/disconnected tab likely consumed the command or the trainer connection dropped.
 
 ## Agent Events
 
