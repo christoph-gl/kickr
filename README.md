@@ -19,6 +19,7 @@ A Next.js, TypeScript, and React-based web application that connects directly to
   - **AI Image Import:** Upload a screenshot of a 4DP® or ERG workout chart, and the Vercel AI SDK (via Vercel AI Gateway) will automatically extract the structure and translate it into a playable workout scaled to your profile.
 - **Rider Profile Management:** Configure and store your Neuromuscular Power (NM), Anaerobic Capacity (AC), Maximal Aerobic Power (MAP), Functional Threshold Power (FTP), and Cycling Threshold Heart Rate (cTHR) zones.
 - **Data Export:** Download a `.csv` record of your ride telemetry containing timestamps, power, cadence, speed, heart rate, and resistance level.
+- **Local Agent Control Bridge:** Queue local agent commands through `/api/agent/commands`, apply them in the browser-owned Bluetooth session, and persist ride snapshots plus command outcomes to SQLite.
 
 ## Getting Started
 
@@ -51,6 +52,28 @@ A Next.js, TypeScript, and React-based web application that connects directly to
 - Vercel AI SDK (`ai` and `zod`) for image-to-workout extraction
 - Tailwind CSS
 - shadcn/ui components
+
+## Local Agent Bridge
+
+The browser remains the Bluetooth owner, but a local agent can enqueue commands through the Next.js server:
+
+```bash
+curl -X POST http://localhost:3000/api/agent/commands \
+  -H "Content-Type: application/json" \
+  -d '{"type":"set_erg_watts","watts":220,"reason":"HR is steady; lift the target."}'
+```
+
+Supported command types are `set_erg_watts`, `set_resistance`, `send_message`, `start_trainer`, and `stop_trainer`. When a trainer tab is open, it polls the command inbox and applies commands directly.
+
+For the later OpenClaw/Hermes step, point the local agent at this command endpoint and read live ride context from `GET /api/agent/events?limit=200`, rider context from `GET /api/rider`, and history from `GET /api/sessions`. If you set `AGENT_COMMAND_TOKEN`, external callers must include `Authorization: Bearer <token>`.
+
+## SQLite Persistence
+
+Runtime data is stored in `.data/kickr.sqlite`, which is intentionally ignored by git. The database currently contains `ride_sessions`, `ride_samples`, `agent_events`, `agent_commands`, and `rider_profile`.
+
+The browser still keeps a localStorage fallback for existing history and offline resilience. On first load, if SQLite has no sessions but localStorage does, the app backfills those sessions into SQLite.
+
+The rider profile is seeded from the original static profile and now includes 4DP values, cycling threshold heart rate, HR zones, age, weight, gender, and a future `memorySummary` field for LLM-updated ride/performance notes.
 
 ## Further Development
 See `agents.md` for guidelines and instructions for LLMs (like Gemini) working on this project in the future.

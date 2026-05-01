@@ -4,7 +4,9 @@ import { useRef, useState, useEffect } from "react";
 import { KickrCore2Client } from "@/lib/kickr-client";
 import { HeartRateClient } from "@/lib/hr-client";
 import { Button } from "@/components/ui/button";
-import { RIDER_PROFILE } from "@/lib/profile";
+import { Cog } from "lucide-react";
+import { getRiderProfile, RIDER_PROFILE, saveRiderProfile, type RiderProfile } from "@/lib/profile";
+import type { AgentCommand, AgentEvent } from "@/lib/agent";
 import { WorkoutPlayer } from "@/components/workout-player";
 import { 
   RideSession, 
@@ -25,6 +27,14 @@ import {
 type ConnectionState = "disconnected" | "connecting" | "connected";
 type TrainerMode = "erg" | "resistance";
 type ActiveTrainerMode = { type: "none" } | { type: "erg", watts: number } | { type: "resistance", level: number };
+type AgentJournalEntry = {
+  id: string;
+  timestamp: number;
+  label: string;
+  reason?: string;
+  status: "received" | "applied" | "failed";
+  message?: string;
+};
 
 export default function App() {
   const clientRef = useRef(new KickrCore2Client());
@@ -36,6 +46,10 @@ export default function App() {
   const [power, setPower] = useState<number | undefined>();
   const [cadence, setCadence] = useState<number | undefined>();
   const [heartRate, setHeartRate] = useState<number | undefined>();
+  const [riderProfile, setRiderProfile] = useState<RiderProfile>(RIDER_PROFILE);
+  const [settingsProfile, setSettingsProfile] = useState<RiderProfile>(RIDER_PROFILE);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
   
   // Controls
   const [mode, setMode] = useState<TrainerMode>("erg");
@@ -44,14 +58,21 @@ export default function App() {
   
   // What the trainer is currently running
   const [activeTrainerMode, setActiveTrainerMode] = useState<ActiveTrainerMode>({ type: "none" });
+  const [agentJournal, setAgentJournal] = useState<AgentJournalEntry[]>([]);
+  const [agentMessage, setAgentMessage] = useState<string | null>(null);
 
   const [sessions, setSessions] = useState<RideSession[]>([]);
   const currentSessionFilenameRef = useRef<string | null>(null);
   const activeWorkoutNameRef = useRef<string>("Manual Ride");
   const unsavedSamplesRef = useRef<any[]>([]);
+  const pollingAgentCommandsRef = useRef(false);
 
   useEffect(() => {
-    setSessions(getSavedRideSessions());
+    getSavedRideSessions().then(setSessions);
+    getRiderProfile().then((profile) => {
+      setRiderProfile(profile);
+      setSettingsProfile(profile);
+    });
   }, []);
 
   const logSamples = async (samples: any[], isNew: boolean, finalMetrics?: any) => {
@@ -65,7 +86,7 @@ export default function App() {
           isNew,
           metadata: isNew ? {
             workoutName: activeWorkoutNameRef.current,
-            profile: RIDER_PROFILE.fourDP
+            profile: riderProfile.fourDP
           } : undefined,
           finalMetrics
         }),
@@ -75,8 +96,122 @@ export default function App() {
     }
   };
 
+  const logAgentEvent = async (event: AgentEvent) => {
+    try {
+      await fetch("/api/agent/events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(event),
+      });
+    } catch (e) {
+      console.error("Failed to log agent event:", e);
+    }
+  };
+
+  const describeAgentCommand = (command: AgentCommand) => {
+    if (command.type === "set_erg_watts") return `Set ERG to ${command.watts} W`;
+    if (command.type === "set_resistance") return `Set resistance to ${command.percent}%`;
+    if (command.type === "send_message") return command.text;
+    if (command.type === "start_trainer") return "Start trainer";
+    if (command.type === "stop_trainer") return "Stop trainer";
+    return "Agent command";
+  };
+
+  const updateAgentJournal = (
+    command: AgentCommand,
+    status: AgentJournalEntry["status"],
+    message?: string
+  ) => {
+    const id = command.id || `agent-command-${Date.now()}`;
+
+    setAgentJournal((prev) => {
+      const existing = prev.find((entry) => entry.id === id);
+      if (existing) {
+        return prev.map((entry) =>
+          entry.id === id
+            ? { ...entry, status, message, timestamp: Date.now() }
+            : entry
+        );
+      }
+
+      return [
+        {
+          id,
+          timestamp: Date.now(),
+          label: describeAgentCommand(command),
+          reason: command.reason,
+          status,
+          message,
+        },
+        ...prev,
+      ].slice(0, 12);
+    });
+  };
+
+  const setDraftProfileNumber = (
+    section: "fourDP",
+    key: keyof RiderProfile["fourDP"],
+    value: string
+  ) => {
+    setSettingsProfile((profile) => ({
+      ...profile,
+      [section]: {
+        ...profile[section],
+        [key]: Number(value) || 0,
+      },
+    }));
+  };
+
+  const setDraftRootNumber = (key: "age" | "weightKg", value: string) => {
+    setSettingsProfile((profile) => ({
+      ...profile,
+      [key]: value === "" ? null : Number(value),
+    }));
+  };
+
+  const updateDraftHrZone = (
+    zoneId: string,
+    key: "name" | "percentageRange" | "minBpm" | "maxBpm" | "color",
+    value: string
+  ) => {
+    setSettingsProfile((profile) => ({
+      ...profile,
+      hrZones: profile.hrZones.map((zone) =>
+        zone.id === zoneId
+          ? {
+              ...zone,
+              [key]: key === "minBpm" || key === "maxBpm" ? Number(value) || 0 : value,
+            }
+          : zone
+      ),
+    }));
+  };
+
+  const handleSettingsOpenChange = (open: boolean) => {
+    if (open) {
+      setSettingsProfile(riderProfile);
+    }
+    setIsSettingsOpen(open);
+  };
+
+  const handleSaveProfile = async () => {
+    setIsSavingProfile(true);
+    try {
+      await saveRiderProfile(settingsProfile);
+      const saved = await getRiderProfile();
+      setRiderProfile(saved);
+      setSettingsProfile(saved);
+      setIsSettingsOpen(false);
+    } catch (e) {
+      console.error(e);
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
+
   const currentHrZone = heartRate 
-    ? RIDER_PROFILE.hrZones.find(z => heartRate >= z.minBpm && heartRate <= z.maxBpm) 
+    ? riderProfile.hrZones.find(z => heartRate >= z.minBpm && heartRate <= z.maxBpm) 
     : undefined;
 
   async function connect() {
@@ -165,10 +300,22 @@ export default function App() {
     }
   }
 
-  async function applyResistance() {
+  async function setTrainerResistance(level: number) {
+    await clientRef.current.setResistance(level);
+    setActiveTrainerMode({ type: "resistance", level });
+    setResistance(level);
+  }
+
+  async function setTrainerTargetPower(watts: number) {
+    await clientRef.current.setTargetPower(watts);
+    setActiveTrainerMode({ type: "erg", watts });
+    setTargetPower(watts);
+  }
+
+  async function applyResistance(level?: number) {
+    const levelToSet = typeof level === "number" ? level : resistance;
     try {
-      await clientRef.current.setResistance(resistance);
-      setActiveTrainerMode({ type: "resistance", level: resistance });
+      await setTrainerResistance(levelToSet);
     } catch (e) {
       console.error(e);
       alert(e instanceof Error ? e.message : String(e));
@@ -178,22 +325,115 @@ export default function App() {
   async function applyTargetPower(watts?: number) {
     const powerToSet = typeof watts === "number" ? watts : targetPower;
     try {
-      await clientRef.current.setTargetPower(powerToSet);
-      setActiveTrainerMode({ type: "erg", watts: powerToSet });
-      if (typeof watts === "number") {
-        setTargetPower(watts);
-      }
+      await setTrainerTargetPower(powerToSet);
     } catch (e) {
       console.error(e);
       alert(e instanceof Error ? e.message : String(e));
     }
   }
 
-  const handleStopSession = (workoutName: string) => {
+  const executeAgentCommand = async (command: AgentCommand) => {
+    updateAgentJournal(command, "received");
+    await logAgentEvent({
+      type: "command_received",
+      sessionId: currentSessionFilenameRef.current,
+      timestamp: Date.now(),
+      command,
+    });
+
+    try {
+      if (command.type === "set_erg_watts") {
+        await setTrainerTargetPower(command.watts);
+      } else if (command.type === "set_resistance") {
+        await setTrainerResistance(command.percent);
+      } else if (command.type === "send_message") {
+        setAgentMessage(command.text);
+      } else if (command.type === "start_trainer") {
+        await clientRef.current.start();
+      } else if (command.type === "stop_trainer") {
+        await clientRef.current.stop();
+      }
+
+      updateAgentJournal(command, "applied");
+      await logAgentEvent({
+        type: "command_applied",
+        sessionId: currentSessionFilenameRef.current,
+        timestamp: Date.now(),
+        command,
+      });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      updateAgentJournal(command, "failed", message);
+      await logAgentEvent({
+        type: "command_failed",
+        sessionId: currentSessionFilenameRef.current,
+        timestamp: Date.now(),
+        command,
+        message,
+      });
+    }
+  };
+
+  useEffect(() => {
+    const pollAgentCommands = async () => {
+      if (pollingAgentCommandsRef.current) return;
+      pollingAgentCommandsRef.current = true;
+
+      try {
+        const res = await fetch("/api/agent/commands");
+        if (!res.ok) return;
+
+        const data = await res.json();
+        const commands = Array.isArray(data.commands) ? data.commands as AgentCommand[] : [];
+
+        for (const command of commands) {
+          await executeAgentCommand(command);
+        }
+      } catch (e) {
+        console.error("Failed to poll agent commands:", e);
+      } finally {
+        pollingAgentCommandsRef.current = false;
+      }
+    };
+
+    const interval = window.setInterval(pollAgentCommands, 3000);
+    pollAgentCommands();
+
+    return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (connectionState !== "connected") return;
+
+    const sendSnapshot = () => {
+      const samples = clientRef.current.samples;
+      const latestSample = samples.length > 0 ? samples[samples.length - 1] : undefined;
+
+      logAgentEvent({
+        type: "ride_snapshot",
+        sessionId: currentSessionFilenameRef.current,
+        timestamp: Date.now(),
+        workoutName: activeWorkoutNameRef.current,
+        connectionState,
+        hrConnectionState,
+        activeTrainerMode,
+        latestSample,
+        sampleCount: samples.length,
+        riderProfile,
+      });
+    };
+
+    const interval = window.setInterval(sendSnapshot, 5000);
+    sendSnapshot();
+
+    return () => window.clearInterval(interval);
+  }, [activeTrainerMode, connectionState, hrConnectionState, riderProfile]);
+
+  const handleStopSession = async (workoutName: string) => {
     const samples = [...clientRef.current.samples];
     if (samples.length === 0) return;
 
-    const metrics = calculateActualMetrics(samples, RIDER_PROFILE.fourDP.ftp);
+    const metrics = calculateActualMetrics(samples, riderProfile.fourDP.ftp);
     
     // Final log of remaining samples and metrics before ending session
     logSamples(unsavedSamplesRef.current, false, metrics);
@@ -207,7 +447,7 @@ export default function App() {
       metrics
     };
 
-    saveRideSession(newSession);
+    await saveRideSession(newSession);
     setSessions(prev => [newSession, ...prev]);
     clientRef.current.samples = []; // Clear samples for next session
     currentSessionFilenameRef.current = null; // Mark session as ended
@@ -241,9 +481,9 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
-  const handleDeleteSession = (id: string) => {
+  const handleDeleteSession = async (id: string) => {
     if (window.confirm("Delete this session?")) {
-      deleteRideSession(id);
+      await deleteRideSession(id);
       setSessions(prev => prev.filter(s => s.id !== id));
     }
   };
@@ -276,6 +516,9 @@ export default function App() {
     URL.revokeObjectURL(url);
   }
 
+  const inputClass = "h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
+  const labelClass = "flex flex-col gap-1 text-xs font-semibold text-muted-foreground";
+
   return (
     <main className="flex min-h-svh p-6">
       {/* Left Column - Controls & Telemetry */}
@@ -284,88 +527,167 @@ export default function App() {
         {/* Header with Settings */}
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold">Workout Controller</h1>
-          <Dialog>
+          <Dialog open={isSettingsOpen} onOpenChange={handleSettingsOpenChange}>
             <DialogTrigger asChild>
-              <Button variant="outline" size="sm">Settings</Button>
+              <Button variant="outline" size="icon" aria-label="Open rider settings">
+                <Cog className="h-4 w-4" />
+              </Button>
             </DialogTrigger>
-            <DialogContent className="sm:max-w-xl max-h-[90vh] overflow-y-auto">
+            <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
-                <DialogTitle>Profile Settings</DialogTitle>
+                <DialogTitle>Rider Settings</DialogTitle>
                 <DialogDescription>
-                  Your current rider profile and target zones.
+                  Profile values used by workouts, ride metrics, and the local agent.
                 </DialogDescription>
               </DialogHeader>
               <div className="flex flex-col gap-6 mt-4">
-                {/* 4DP Profile Card */}
                 <div className="flex flex-col border rounded-md bg-card overflow-hidden">
                   <div className="p-4 bg-muted/20 border-b">
                     <h3 className="font-semibold text-base">Four Dimensional Power (4DP®) Profile</h3>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Your Neuromuscular Power (NM), Anaerobic Capacity (AC), Maximal Aerobic Power (MAP) and Functional Threshold Power (FTP) are used to set your workout targets.
-                    </p>
                   </div>
-                  <div className="flex flex-col divide-y">
-                    <div className="flex items-center justify-between p-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-4 h-4 rounded-full" style={{ backgroundColor: RIDER_PROFILE.colors.nm }}></div>
-                        <span className="font-medium">NM (5 second)</span>
-                      </div>
-                      <span className="font-mono">{RIDER_PROFILE.fourDP.nm} watts</span>
-                    </div>
-                    <div className="flex items-center justify-between p-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-4 h-4 rounded-full" style={{ backgroundColor: RIDER_PROFILE.colors.ac }}></div>
-                        <span className="font-medium">AC (1 minute)</span>
-                      </div>
-                      <span className="font-mono">{RIDER_PROFILE.fourDP.ac} watts</span>
-                    </div>
-                    <div className="flex items-center justify-between p-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-4 h-4 rounded-full" style={{ backgroundColor: RIDER_PROFILE.colors.map }}></div>
-                        <span className="font-medium">MAP (5 minute)</span>
-                      </div>
-                      <span className="font-mono">{RIDER_PROFILE.fourDP.map} watts</span>
-                    </div>
-                    <div className="flex items-center justify-between p-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-4 h-4 rounded-full" style={{ backgroundColor: RIDER_PROFILE.colors.ftp }}></div>
-                        <span className="font-medium">FTP (20 minute)</span>
-                      </div>
-                      <span className="font-mono">{RIDER_PROFILE.fourDP.ftp} watts</span>
-                    </div>
+                  <div className="grid grid-cols-2 gap-4 p-4 sm:grid-cols-4">
+                    {([
+                      ["nm", "NM (5s)"],
+                      ["ac", "AC (1m)"],
+                      ["map", "MAP (5m)"],
+                      ["ftp", "FTP (20m)"],
+                    ] as const).map(([key, label]) => (
+                      <label key={key} className={labelClass}>
+                        <span>{label}</span>
+                        <input
+                          type="number"
+                          min="0"
+                          value={settingsProfile.fourDP[key]}
+                          onChange={(e) => setDraftProfileNumber("fourDP", key, e.target.value)}
+                          className={inputClass}
+                        />
+                      </label>
+                    ))}
                   </div>
                 </div>
 
-                {/* Heart Rate Zones Card */}
+                <div className="flex flex-col border rounded-md bg-card overflow-hidden">
+                  <div className="p-4 bg-muted/20 border-b">
+                    <h3 className="font-semibold text-base">Body Profile</h3>
+                  </div>
+                  <div className="grid grid-cols-1 gap-4 p-4 sm:grid-cols-4">
+                    <label className={labelClass}>
+                      <span>Age</span>
+                      <input
+                        type="number"
+                        min="0"
+                        value={settingsProfile.age ?? ""}
+                        onChange={(e) => setDraftRootNumber("age", e.target.value)}
+                        className={inputClass}
+                      />
+                    </label>
+                    <label className={labelClass}>
+                      <span>Weight (kg)</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.1"
+                        value={settingsProfile.weightKg ?? ""}
+                        onChange={(e) => setDraftRootNumber("weightKg", e.target.value)}
+                        className={inputClass}
+                      />
+                    </label>
+                    <label className={labelClass}>
+                      <span>Gender</span>
+                      <select
+                        value={settingsProfile.gender ?? ""}
+                        onChange={(e) => setSettingsProfile((profile) => ({ ...profile, gender: e.target.value || null }))}
+                        className={inputClass}
+                      >
+                        <option value="">Unset</option>
+                        <option value="male">Male</option>
+                        <option value="female">Female</option>
+                      </select>
+                    </label>
+                    <label className={labelClass}>
+                      <span>cTHR</span>
+                      <input
+                        type="number"
+                        min="0"
+                        value={settingsProfile.cTHR}
+                        onChange={(e) => setSettingsProfile((profile) => ({ ...profile, cTHR: Number(e.target.value) || 0 }))}
+                        className={inputClass}
+                      />
+                    </label>
+                  </div>
+                </div>
+
                 <div className="flex flex-col border rounded-md bg-card overflow-hidden">
                   <div className="p-4 bg-muted/20 border-b flex justify-between items-center">
                     <div>
-                      <h3 className="font-semibold text-base">cTHR and Heart Rate Zones</h3>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Cycling Threshold Heart Rate (cTHR) is your expected heart rate when riding at FTP.
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-xs text-muted-foreground uppercase font-semibold">cTHR</div>
-                      <div className="font-mono text-lg">{RIDER_PROFILE.cTHR} bpm</div>
+                      <h3 className="font-semibold text-base">Heart Rate Zones</h3>
                     </div>
                   </div>
                   <div className="flex flex-col divide-y">
-                    <div className="grid grid-cols-3 gap-4 p-3 px-4 text-xs font-semibold text-muted-foreground uppercase bg-muted/10">
-                      <div>Zone</div>
-                      <div>Range (%cTHR)</div>
-                      <div className="text-right">BPM</div>
+                    <div className="grid grid-cols-[1fr_1fr_72px_72px_44px] gap-2 p-3 px-4 text-xs font-semibold text-muted-foreground uppercase bg-muted/10">
+                      <div>Name</div>
+                      <div>Range</div>
+                      <div>Min</div>
+                      <div>Max</div>
+                      <div>Color</div>
                     </div>
-                    {RIDER_PROFILE.hrZones.map((zone) => (
-                      <div key={zone.id} className="grid grid-cols-3 gap-4 p-4 items-center">
-                        <div className="font-medium">{zone.name}</div>
-                        <div className="text-muted-foreground">{zone.percentageRange}</div>
-                        <div className="text-right font-mono">
-                          {zone.id === "z1" ? `< ${zone.maxBpm}` : zone.id === "z5" ? `> ${zone.minBpm}` : `${zone.minBpm} - ${zone.maxBpm}`}
-                        </div>
+                    {settingsProfile.hrZones.map((zone) => (
+                      <div key={zone.id} className="grid grid-cols-[1fr_1fr_72px_72px_44px] gap-2 p-3 items-center">
+                        <input
+                          value={zone.name}
+                          onChange={(e) => updateDraftHrZone(zone.id, "name", e.target.value)}
+                          className={inputClass}
+                        />
+                        <input
+                          value={zone.percentageRange}
+                          onChange={(e) => updateDraftHrZone(zone.id, "percentageRange", e.target.value)}
+                          className={inputClass}
+                        />
+                        <input
+                          type="number"
+                          min="0"
+                          value={zone.minBpm}
+                          onChange={(e) => updateDraftHrZone(zone.id, "minBpm", e.target.value)}
+                          className={inputClass}
+                        />
+                        <input
+                          type="number"
+                          min="0"
+                          value={zone.maxBpm}
+                          onChange={(e) => updateDraftHrZone(zone.id, "maxBpm", e.target.value)}
+                          className={inputClass}
+                        />
+                        <input
+                          type="color"
+                          value={zone.color}
+                          onChange={(e) => updateDraftHrZone(zone.id, "color", e.target.value)}
+                          className="h-9 w-full rounded-md border border-input bg-transparent p-1"
+                        />
                       </div>
                     ))}
                   </div>
+                </div>
+
+                <div className="flex flex-col border rounded-md bg-card overflow-hidden">
+                  <div className="p-4 bg-muted/20 border-b">
+                    <h3 className="font-semibold text-base">Rider Memory Summary</h3>
+                  </div>
+                  <div className="p-4">
+                    <textarea
+                      value={settingsProfile.memorySummary}
+                      onChange={(e) => setSettingsProfile((profile) => ({ ...profile, memorySummary: e.target.value }))}
+                      className="min-h-28 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" onClick={() => handleSettingsOpenChange(false)}>
+                    Cancel
+                  </Button>
+                  <Button onClick={handleSaveProfile} disabled={isSavingProfile}>
+                    {isSavingProfile ? "Saving..." : "Save Settings"}
+                  </Button>
                 </div>
               </div>
             </DialogContent>
@@ -526,7 +848,7 @@ export default function App() {
                 </label>
 
                 <Button 
-                  onClick={applyResistance} 
+                  onClick={() => applyResistance()} 
                   className="w-full"
                   disabled={connectionState !== "connected"}
                 >
@@ -537,6 +859,71 @@ export default function App() {
                 </p>
               </div>
             )}
+          </div>
+
+          <div className="flex flex-col gap-3 p-4 rounded-md border bg-card">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="font-semibold text-base">Agent Controller</h2>
+                <p className="text-xs text-muted-foreground">
+                  Local command inbox: <span className="font-mono">/api/agent/commands</span>
+                </p>
+              </div>
+              <span className="rounded-sm bg-muted px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                Direct
+              </span>
+            </div>
+
+            {agentMessage && (
+              <div className="rounded-md border bg-muted/30 p-3 text-sm">
+                <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                  Latest Agent Note
+                </div>
+                <p>{agentMessage}</p>
+              </div>
+            )}
+
+            <div className="flex flex-col gap-2">
+              {agentJournal.length === 0 ? (
+                <p className="py-2 text-xs text-muted-foreground">
+                  Waiting for local agent commands.
+                </p>
+              ) : (
+                agentJournal.map((entry) => (
+                  <div key={entry.id} className="rounded-md border bg-muted/10 p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium">{entry.label}</div>
+                        {entry.reason && (
+                          <div className="mt-1 text-xs text-muted-foreground">{entry.reason}</div>
+                        )}
+                        {entry.message && (
+                          <div className="mt-1 text-xs text-red-500">{entry.message}</div>
+                        )}
+                      </div>
+                      <span
+                        className={`shrink-0 rounded-sm px-2 py-0.5 text-[10px] font-bold uppercase ${
+                          entry.status === "applied"
+                            ? "bg-green-500/15 text-green-600"
+                            : entry.status === "failed"
+                              ? "bg-red-500/15 text-red-600"
+                              : "bg-yellow-500/15 text-yellow-600"
+                        }`}
+                      >
+                        {entry.status}
+                      </span>
+                    </div>
+                    <div className="mt-2 text-[10px] text-muted-foreground">
+                      {new Date(entry.timestamp).toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        second: "2-digit",
+                      })}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
 
           <div className="flex flex-col gap-2 pt-2 border-t">
@@ -621,6 +1008,7 @@ export default function App() {
            heartRate={heartRate}
            currentHrZone={currentHrZone}
            activeTrainerMode={activeTrainerMode}
+           riderProfile={riderProfile}
         />
       </div>
     </main>

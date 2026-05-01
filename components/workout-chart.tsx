@@ -1,26 +1,28 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { RIDER_PROFILE } from "@/lib/profile";
+import { RIDER_PROFILE, type RiderProfile } from "@/lib/profile";
 import { Workout, calculateWorkoutMetrics } from "@/lib/workouts";
 
-function getColorForPower(power: number) {
-  if (power >= RIDER_PROFILE.fourDP.ac * 0.95) return RIDER_PROFILE.colors.nm;
-  if (power >= RIDER_PROFILE.fourDP.map * 0.95) return RIDER_PROFILE.colors.ac;
-  if (power >= RIDER_PROFILE.fourDP.ftp * 1.05) return RIDER_PROFILE.colors.map;
-  return RIDER_PROFILE.colors.ftp;
+function getColorForPower(power: number, riderProfile: RiderProfile) {
+  if (power >= riderProfile.fourDP.ac * 0.95) return riderProfile.colors.nm;
+  if (power >= riderProfile.fourDP.map * 0.95) return riderProfile.colors.ac;
+  if (power >= riderProfile.fourDP.ftp * 1.05) return riderProfile.colors.map;
+  return riderProfile.colors.ftp;
 }
 
 export function WorkoutChart({ 
   workout, 
   progressSeconds,
   onSeek,
-  preview = false
+  preview = false,
+  riderProfile = RIDER_PROFILE,
 }: { 
   workout: Workout; 
   progressSeconds: number;
   onSeek?: (seconds: number) => void;
   preview?: boolean;
+  riderProfile?: RiderProfile;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [hoverTime, setHoverTime] = useState<number | null>(null);
@@ -29,11 +31,11 @@ export function WorkoutChart({
   // Ensure the chart scales to at least AC or the max power in the workout
   const maxPower = Math.max(
     ...workout.blocks.map(b => b.targetPower),
-    RIDER_PROFILE.fourDP.ac * 1.1
+    riderProfile.fourDP.ac * 1.1
   );
   
   const height = preview ? 100 : 300;
-  const ftpY = height - (RIDER_PROFILE.fourDP.ftp / maxPower) * height;
+  const ftpY = height - (riderProfile.fourDP.ftp / maxPower) * height;
 
   const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
     if (preview || !svgRef.current) return;
@@ -55,7 +57,7 @@ export function WorkoutChart({
     onSeek(Math.round(percent * totalDuration));
   };
 
-  const metrics = calculateWorkoutMetrics(workout, RIDER_PROFILE.fourDP.ftp);
+  const metrics = calculateWorkoutMetrics(workout, riderProfile.fourDP.ftp);
 
   // Find hovered block
   let hoveredBlock = null;
@@ -89,7 +91,7 @@ export function WorkoutChart({
             const blockWidth = (block.durationSeconds / totalDuration) * 100;
             const blockHeight = (block.targetPower / maxPower) * height;
             const y = height - blockHeight;
-            const color = getColorForPower(block.targetPower);
+            const color = getColorForPower(block.targetPower, riderProfile);
             const rect = (
               <rect
                 key={i}
@@ -128,13 +130,13 @@ export function WorkoutChart({
         <div className="text-right flex items-center gap-4">
           <div className="flex gap-1.5 items-center">
             <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider mr-1">NM</span>
-            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: RIDER_PROFILE.colors.nm }}></div>
+            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: riderProfile.colors.nm }}></div>
             <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider ml-1 mr-1">AC</span>
-            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: RIDER_PROFILE.colors.ac }}></div>
+            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: riderProfile.colors.ac }}></div>
             <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider ml-1 mr-1">MAP</span>
-            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: RIDER_PROFILE.colors.map }}></div>
+            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: riderProfile.colors.map }}></div>
             <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider ml-1 mr-1">FTP</span>
-            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: RIDER_PROFILE.colors.ftp }}></div>
+            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: riderProfile.colors.ftp }}></div>
           </div>
         </div>
       </div>
@@ -164,7 +166,7 @@ export function WorkoutChart({
             const blockWidth = (block.durationSeconds / totalDuration) * 100;
             const blockHeight = (block.targetPower / maxPower) * height;
             const y = height - blockHeight;
-            const color = getColorForPower(block.targetPower);
+            const color = getColorForPower(block.targetPower, riderProfile);
             
             const rect = (
               <rect
@@ -228,7 +230,7 @@ export function WorkoutChart({
           className="absolute left-2 px-2 py-0.5 bg-white text-black text-xs font-bold rounded-full shadow-sm pointer-events-none"
           style={{ top: `${(ftpY / height) * 100}%`, transform: 'translateY(-50%)' }}
         >
-          {RIDER_PROFILE.fourDP.ftp} W
+          {riderProfile.fourDP.ftp} W
         </div>
 
         {/* Hover Tooltip Overlay */}

@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { WORKOUTS, Workout, parseLLMWorkout, saveWorkout, getSavedWorkouts, updateWorkout, parseZwoWorkout, calculateWorkoutMetrics } from "@/lib/workouts";
 import { WorkoutChart } from "./workout-chart";
 import { Button } from "./ui/button";
-import { RIDER_PROFILE } from "@/lib/profile";
+import { RIDER_PROFILE, type RiderProfile } from "@/lib/profile";
 import { audioService } from "@/lib/audio";
 import {
   Dialog,
@@ -24,7 +24,8 @@ export function WorkoutPlayer({
   cadence,
   heartRate,
   currentHrZone,
-  activeTrainerMode
+  activeTrainerMode,
+  riderProfile = RIDER_PROFILE,
 }: { 
   onPowerTargetChange: (watts: number) => void;
   onStopSession: (workoutName: string) => void;
@@ -35,6 +36,7 @@ export function WorkoutPlayer({
   heartRate?: number;
   currentHrZone?: any;
   activeTrainerMode: any;
+  riderProfile?: RiderProfile;
 }) {
   const [allWorkouts, setAllWorkouts] = useState<Workout[]>(WORKOUTS);
   const [workout, setWorkout] = useState<Workout>(WORKOUTS[0]);
@@ -237,7 +239,7 @@ export function WorkoutPlayer({
       }
 
       const llmWorkout = await res.json();
-      const parsedWorkout = parseLLMWorkout(llmWorkout);
+      const parsedWorkout = parseLLMWorkout(llmWorkout, riderProfile);
 
       await saveWorkout(parsedWorkout);
       setAllWorkouts(prev => [...prev, parsedWorkout]);
@@ -258,7 +260,7 @@ export function WorkoutPlayer({
 
     try {
       const text = await file.text();
-      const parsedWorkout = parseZwoWorkout(text);
+      const parsedWorkout = parseZwoWorkout(text, riderProfile);
 
       await saveWorkout(parsedWorkout);
       setAllWorkouts(prev => [...prev, parsedWorkout]);
@@ -376,7 +378,7 @@ export function WorkoutPlayer({
               </DialogHeader>
 
               <div className="flex-1 overflow-y-auto p-6 pt-2 flex flex-col gap-3">                {allWorkouts.map((w) => {
-                  const metrics = calculateWorkoutMetrics(w, RIDER_PROFILE.fourDP.ftp);
+                  const metrics = calculateWorkoutMetrics(w, riderProfile.fourDP.ftp);
                   const duration = w.blocks.reduce((acc, b) => acc + b.durationSeconds, 0);
                   const isActive = workout.id === w.id;
 
@@ -418,7 +420,7 @@ export function WorkoutPlayer({
                           </div>
                         )}
                       </div>
-                      <WorkoutChart workout={w} progressSeconds={0} preview={true} />
+                      <WorkoutChart workout={w} progressSeconds={0} preview={true} riderProfile={riderProfile} />
                     </div>
                   );
                 })}
@@ -428,7 +430,7 @@ export function WorkoutPlayer({
         </div>
       </div>
 
-      <WorkoutChart workout={workout} progressSeconds={elapsedSeconds} onSeek={handleSeek} />
+      <WorkoutChart workout={workout} progressSeconds={elapsedSeconds} onSeek={handleSeek} riderProfile={riderProfile} />
 
       {/* Telemetry Card - Integrated into Player */}
       <div className="flex flex-col rounded-md border bg-muted/20 overflow-hidden">

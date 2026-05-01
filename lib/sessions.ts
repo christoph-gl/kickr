@@ -17,14 +17,24 @@ export type RideSession = {
   metrics: SessionMetrics;
 };
 
-export function saveRideSession(session: RideSession) {
+export async function saveRideSession(session: RideSession) {
   if (typeof window === "undefined") return;
-  const sessions = getSavedRideSessions();
+  try {
+    await fetch("/api/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(session),
+    });
+  } catch (e) {
+    console.error("Failed to save ride session via API:", e);
+  }
+
+  const sessions = getLocalRideSessions();
   sessions.unshift(session); // Newest first
   localStorage.setItem("ride_history", JSON.stringify(sessions));
 }
 
-export function getSavedRideSessions(): RideSession[] {
+export function getLocalRideSessions(): RideSession[] {
   if (typeof window === "undefined") return [];
   try {
     const data = localStorage.getItem("ride_history");
@@ -34,9 +44,40 @@ export function getSavedRideSessions(): RideSession[] {
   }
 }
 
-export function deleteRideSession(id: string) {
+export async function getSavedRideSessions(): Promise<RideSession[]> {
+  if (typeof window === "undefined") return [];
+  try {
+    const res = await fetch("/api/sessions");
+    if (!res.ok) throw new Error("Failed to fetch sessions");
+    const sessions = await res.json();
+    if (Array.isArray(sessions) && sessions.length > 0) {
+      return sessions;
+    }
+
+    const localSessions = getLocalRideSessions();
+    if (localSessions.length > 0) {
+      await Promise.all(localSessions.map((session) => saveRideSession(session)));
+      return localSessions;
+    }
+
+    return [];
+  } catch (e) {
+    console.error("Failed to load ride sessions via API:", e);
+    return getLocalRideSessions();
+  }
+}
+
+export async function deleteRideSession(id: string) {
   if (typeof window === "undefined") return;
-  const sessions = getSavedRideSessions();
+  try {
+    await fetch(`/api/sessions?id=${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+  } catch (e) {
+    console.error("Failed to delete ride session via API:", e);
+  }
+
+  const sessions = getLocalRideSessions();
   const filtered = sessions.filter(s => s.id !== id);
   localStorage.setItem("ride_history", JSON.stringify(filtered));
 }

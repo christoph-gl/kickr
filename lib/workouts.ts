@@ -1,4 +1,4 @@
-import { RIDER_PROFILE } from "./profile";
+import { RIDER_PROFILE, type RiderProfile } from "./profile";
 
 export type WorkoutBlock = {
   durationSeconds: number;
@@ -25,16 +25,19 @@ export type LLMWorkout = {
   blocks: LLMWorkoutBlock[];
 };
 
-export function parseLLMWorkout(llmJson: LLMWorkout): Workout {
+export function parseLLMWorkout(
+  llmJson: LLMWorkout,
+  riderProfile: RiderProfile = RIDER_PROFILE
+): Workout {
   return {
     id: "imported-" + Date.now(),
     name: llmJson.name || "Imported Workout",
     description: "Imported via AI extraction",
     blocks: llmJson.blocks.map((block) => {
-      let basePower = RIDER_PROFILE.fourDP.ftp;
-      if (block.reference_metric === "MAP") basePower = RIDER_PROFILE.fourDP.map;
-      if (block.reference_metric === "AC") basePower = RIDER_PROFILE.fourDP.ac;
-      if (block.reference_metric === "NM") basePower = RIDER_PROFILE.fourDP.nm;
+      let basePower = riderProfile.fourDP.ftp;
+      if (block.reference_metric === "MAP") basePower = riderProfile.fourDP.map;
+      if (block.reference_metric === "AC") basePower = riderProfile.fourDP.ac;
+      if (block.reference_metric === "NM") basePower = riderProfile.fourDP.nm;
 
       return {
         durationSeconds: block.duration_seconds,
@@ -44,7 +47,10 @@ export function parseLLMWorkout(llmJson: LLMWorkout): Workout {
   };
 }
 
-export function parseZwoWorkout(xmlString: string): Workout {
+export function parseZwoWorkout(
+  xmlString: string,
+  riderProfile: RiderProfile = RIDER_PROFILE
+): Workout {
   const parser = new DOMParser();
   const xmlDoc = parser.parseFromString(xmlString, "text/xml");
   
@@ -82,7 +88,7 @@ export function parseZwoWorkout(xmlString: string): Workout {
         
         blocks.push({
           durationSeconds: duration,
-          targetPower: Math.round(RIDER_PROFILE.fourDP.ftp * powerRatio)
+          targetPower: Math.round(riderProfile.fourDP.ftp * powerRatio)
         });
       } else if (tag === "intervalst") {
         const repeat = parseInt(getAttr(node, "Repeat") || "1", 10);
@@ -94,12 +100,12 @@ export function parseZwoWorkout(xmlString: string): Workout {
         for (let r = 0; r < repeat; r++) {
           blocks.push({
             durationSeconds: onDuration,
-            targetPower: Math.round(RIDER_PROFILE.fourDP.ftp * onPower)
+            targetPower: Math.round(riderProfile.fourDP.ftp * onPower)
           });
           if (offDuration > 0) {
             blocks.push({
               durationSeconds: offDuration,
-              targetPower: Math.round(RIDER_PROFILE.fourDP.ftp * offPower)
+              targetPower: Math.round(riderProfile.fourDP.ftp * offPower)
             });
           }
         }
