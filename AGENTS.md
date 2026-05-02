@@ -1,4 +1,4 @@
-# LLM AI Agents Guidelines (`agents.md`)
+# LLM AI Agents Guidelines (`AGENTS.md`)
 
 This document provides instructions and context for any Large Language Model (LLM) or AI agent working on the KICKR CORE 2 Web Controller project.
 
@@ -37,7 +37,7 @@ Communication relies heavily on the **Web Bluetooth API** (`navigator.bluetooth`
    - **Screen Wake Lock:** Uses the `navigator.wakeLock` API to prevent the device from sleeping while a workout is playing. It re-requests the lock on `visibilitychange` to handle tab switching.
 5. **Workout Imports (ZWO & AI):**
    - The app natively parses standard XML `.zwo` (Zwift) files directly in the browser via `DOMParser`.
-   - The app can extract workouts from screenshots using the **Vercel AI SDK** and **Vercel AI Gateway**. The backend endpoint (`/api/extract-workout/route.ts`) expects `AI_GATEWAY_API_KEY` and `AI_GATEWAY_MODEL` to be set in `.env.local` to securely route multimodal requests to models like Gemini Flash.
+   - The app can extract workouts from screenshots using the **Vercel AI SDK** and an image-capable multimodal model. The backend endpoint (`/api/extract-workout/route.ts`) expects `WORKOUT_IMAGE_EXTRACTOR_API_KEY` and `WORKOUT_IMAGE_EXTRACTOR_MODEL` in `.env.local` for screenshot imports. It still accepts `AI_GATEWAY_API_KEY` and `AI_GATEWAY_MODEL` as compatibility fallbacks.
 6. **SQLite Persistence:**
    - Runtime data lives in `.data/kickr.sqlite`, ignored by git.
    - `lib/db.ts` owns schema creation and persistence functions. Keep DB initialization lazy and server-side.
@@ -52,7 +52,7 @@ The architecture intentionally does **not** expose an MCP server. The browser re
 
 | Layer | Lives in | Audience | Read when |
 | --- | --- | --- | --- |
-| **App internals** (FTMS, SQLite, Web Bluetooth, workout player) | `agents.md`, `lib/`, `components/` | Someone editing the KICKR app itself | Code changes |
+| **App internals** (FTMS, SQLite, Web Bluetooth, workout player) | `AGENTS.md`, `lib/`, `components/` | Someone editing the KICKR app itself | Code changes |
 | **One-time setup** (env vars, gateway config, smoke tests) | `.agents/skills/kickr-local-coach/references/*.md` | Agent doing first-time install | Once per machine, plus troubleshooting |
 | **Operating contract** (endpoints, command shapes, hook payloads, coaching loop) | `.agents/skills/kickr-local-coach/dist/agent-skill.<agent>.md` | The running agent | Every coaching turn |
 

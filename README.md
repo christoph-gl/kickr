@@ -16,7 +16,7 @@ A Next.js, TypeScript, and React-based web application that connects directly to
   - **Screen Wake Lock:** Automatically prevents your computer or tablet from sleeping or dimming the screen during an active workout session.
 - **Workout Imports:**
   - **ZWO Files:** Parse and load industry-standard Zwift XML workout files directly in the browser.
-  - **AI Image Import:** Upload a screenshot of a 4DP® or ERG workout chart, and the Vercel AI SDK (via Vercel AI Gateway) will automatically extract the structure and translate it into a playable workout scaled to your profile.
+  - **AI Image Import:** Upload a screenshot of a 4DP® or ERG workout chart, and an image-capable AI model will extract the structure and translate it into a playable workout scaled to your profile.
 - **Rider Profile Management:** Configure and store your Neuromuscular Power (NM), Anaerobic Capacity (AC), Maximal Aerobic Power (MAP), Functional Threshold Power (FTP), and Cycling Threshold Heart Rate (cTHR) zones.
 - **Data Export:** Download a `.csv` record of your ride telemetry containing timestamps, power, cadence, speed, heart rate, and resistance level.
 - **Local Agent Control Bridge:** Queue local agent commands through `/api/agent/commands`, apply them in the browser-owned Bluetooth session, and persist ride snapshots plus command outcomes to SQLite.
@@ -29,12 +29,14 @@ A Next.js, TypeScript, and React-based web application that connects directly to
    npm install
    ```
 
-2. Set up your AI Gateway (Required for Image Imports):
-   Create a `.env.local` file in the root directory and add your Vercel AI Gateway Key:
+2. Optional image-to-workout extraction:
+   Create a `.env.local` file in the root directory if you want screenshot imports. Add an AI SDK / Vercel AI Gateway-compatible key and a multimodal model that can read images:
    ```
-   AI_GATEWAY_API_KEY=your_key_here
-   AI_GATEWAY_MODEL=google/gemini-3-flash
+   WORKOUT_IMAGE_EXTRACTOR_API_KEY=your_image_capable_ai_api_key_here
+   WORKOUT_IMAGE_EXTRACTOR_MODEL=google/gemini-3-flash
    ```
+
+   Plain trainer control, workout playback, and local agent commands work without these values. The app still accepts the older `AI_GATEWAY_API_KEY` / `AI_GATEWAY_MODEL` names as a compatibility fallback.
 
    Optional outbound agent wakeups. Configure **one** backend in `.env.local`. If both are set, Hermes wins.
 
@@ -185,11 +187,11 @@ What lives where:
 
 - **Hot path** (in the installed skill, ~1–2 screens): endpoints, command shapes, hook payload, coaching loop, slash commands, "don't" rules. Self-contained — no repo fetches at runtime.
 - **Cold path** (in `references/`): env-var wiring, gateway config, smoke tests. Read once during install, then forgotten.
-- **Not in the skill at all**: FTMS opcodes, SQLite schema, Web Bluetooth, workout player internals. Those live in `agents.md` for someone editing the app.
+- **Not in the skill at all**: FTMS opcodes, SQLite schema, Web Bluetooth, workout player internals. Those live in `AGENTS.md` for someone editing the app.
 
 Each `dist/agent-skill.*.md` starts with a `kickr-skill-version` line. Bump it whenever the operating contract changes; installed copies use it to detect drift and re-install.
 
 Workflow: agent points at repo once → reads [`INSTALL.md`](./.agents/skills/kickr-local-coach/INSTALL.md) → if the KICKR app isn't running yet, walks the user through Step 0 (clone, `npm install`, `.env.local`, `npm run dev`) → copies the right `dist/*.md` into its own skills dir → does env wiring from `references/` → never opens this repo again until version bumps.
 
 ## Further Development
-See `agents.md` for guidelines and instructions for LLMs (like Gemini) working on this project in the future.
+See `AGENTS.md` for guidelines and instructions for LLMs working on this project in the future.

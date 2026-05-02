@@ -108,9 +108,10 @@ Supported commands:
 {"type":"send_message","text":"Hold cadence steady"}
 {"type":"start_trainer"}
 {"type":"stop_trainer"}
+{"type":"set_workout_plan","horizonSeconds":600,"leadSeconds":20,"blocks":[{"durationSeconds":300,"targetPower":180},{"durationSeconds":300,"targetPower":190}],"reason":"Adaptive freeride refresh"}
 ```
 
-Use `send_message`, `set_erg_watts`, and `set_resistance` for the first integration. Treat `start_trainer` and `stop_trainer` as lower-level trainer commands, not workout-player controls.
+Use `send_message`, `set_erg_watts`, and `set_resistance` for the first integration. Treat `start_trainer` and `stop_trainer` as lower-level trainer commands, not workout-player controls. Use `set_workout_plan` only for adaptive freeride or explicitly planned agent workouts; the browser workout player applies it when connected.
 
 Use the exact command names above. The app accepts these compatibility fallbacks, but fresh agents should queue the canonical commands so behavior stays predictable:
 

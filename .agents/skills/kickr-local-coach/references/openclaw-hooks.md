@@ -61,13 +61,15 @@ Rules:
 
 If OpenClaw's config tool locks sensitive fields during `config.apply`, it is acceptable to edit the OpenClaw JSON config directly, but only for the `hooks` section and only while preserving unrelated config. After a direct config file edit, restart the OpenClaw gateway.
 
-Safe fallback pattern:
+Safe fallback pattern, after confirming the user's OpenClaw config path from `openclaw status` or `openclaw config`:
 
 ```bash
 TOKEN="$(openssl rand -hex 32)"
+export CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
 python3 - <<PY
 import json
-path = "/Users/christophgl/.openclaw/openclaw.json"
+import os
+path = os.environ["CONFIG_PATH"]
 with open(path) as f:
     config = json.load(f)
 hooks = config.setdefault("hooks", {})

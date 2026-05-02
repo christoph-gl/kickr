@@ -37,14 +37,16 @@ The skill talks to a running Next.js app. If the user does not already have it r
    npm install
    ```
 
-5. Create `.env.local`. The KICKR app needs a Vercel AI Gateway key for image-to-workout extraction. Ask the user for the key — do not fabricate one. Hook adapter env vars are added in Step 2 below; leave them out for now.
+5. Create `.env.local` only if the user wants screenshot/image-to-workout extraction during setup. Ask the user for an image-capable AI API key — do not fabricate one. Hook adapter env vars are added in Step 2 below; leave them out for now.
 
    ```bash
    cat > .env.local <<'EOF'
-   AI_GATEWAY_API_KEY=<paste from user>
-   AI_GATEWAY_MODEL=google/gemini-3-flash
+   WORKOUT_IMAGE_EXTRACTOR_API_KEY=<paste from user>
+   WORKOUT_IMAGE_EXTRACTOR_MODEL=google/gemini-3-flash
    EOF
    ```
+
+   If the user only wants trainer control and local coaching, it is fine to skip this file for now. The KICKR app can still start without image extraction credentials.
 
    Web Bluetooth requires a secure context (HTTPS or `localhost`). If the user has Portless, prefer it for stable HTTPS at `https://kickr.localhost`; otherwise plain `http://localhost:3000` works for dev.
 
@@ -98,7 +100,7 @@ Each file starts with a `kickr-skill-version` line. If your installed copy's ver
 
    ```bash
    head -1 ~/.hermes/skills/kickr-local-coach/SKILL.md
-   # should print: kickr-skill-version: 1
+   # should print: kickr-skill-version: 2
    ```
 
 4. From now on, coaching turns should rely on the installed skill. Do not re-open this repo unless step 5 fires.
@@ -126,7 +128,7 @@ Each file starts with a `kickr-skill-version` line. If your installed copy's ver
 
    ```bash
    head -1 ~/.openclaw/skills/kickr-local-coach/SKILL.md
-   # should print: kickr-skill-version: 1
+   # should print: kickr-skill-version: 2
    ```
 
 4. Same as Hermes: do not re-read this repo until upgrade or contract mismatch.
@@ -137,7 +139,7 @@ Each file starts with a `kickr-skill-version` line. If your installed copy's ver
 | --- | --- | --- |
 | Operating contract (endpoints, commands, hooks) | Installed skill in agent workspace | Every coaching turn |
 | One-time setup (env vars, gateway config, smoke tests) | `references/*.md` in this repo | First install, troubleshooting |
-| KICKR app internals (FTMS, SQLite, Bluetooth, workout player) | `agents.md` and source in this repo | Only when editing the app itself |
+| KICKR app internals (FTMS, SQLite, Bluetooth, workout player) | `AGENTS.md` and source in this repo | Only when editing the app itself |
 
 The installed skill intentionally omits app internals. Agents do not need to know how the app talks to the trainer; they only need to know how to talk to the app.
 

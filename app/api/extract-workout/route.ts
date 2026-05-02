@@ -1,20 +1,32 @@
-import { generateObject } from "ai";
-import { z } from "zod";
-import { NextResponse } from "next/server";
+import { generateObject } from "ai"
+import { z } from "zod"
+import { NextResponse } from "next/server"
+
+const workoutImageExtractorApiKey =
+  process.env.WORKOUT_IMAGE_EXTRACTOR_API_KEY || process.env.AI_GATEWAY_API_KEY
+
+const workoutImageExtractorModel =
+  process.env.WORKOUT_IMAGE_EXTRACTOR_MODEL ||
+  process.env.AI_GATEWAY_MODEL ||
+  "google/gemini-3-flash"
 
 export async function POST(request: Request) {
   try {
-    const formData = await request.formData();
-    const file = formData.get("file") as File | null;
+    const formData = await request.formData()
+    const file = formData.get("file") as File | null
 
     if (!file) {
-      return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
+      return NextResponse.json({ error: "No file uploaded" }, { status: 400 })
     }
 
-    const buffer = await file.arrayBuffer();
+    const buffer = await file.arrayBuffer()
+
+    if (workoutImageExtractorApiKey && !process.env.AI_GATEWAY_API_KEY) {
+      process.env.AI_GATEWAY_API_KEY = workoutImageExtractorApiKey
+    }
 
     const result = await generateObject({
-      model: process.env.AI_GATEWAY_MODEL || "google/gemini-3-flash",
+      model: workoutImageExtractorModel,
       messages: [
         {
           role: "user",
@@ -31,7 +43,7 @@ Colors represent different reference metrics:
 - Pink bars reference NM.
 
 Estimate the duration in seconds based on the width of the bars. The total duration is usually given (e.g., 54:21) or implied.
-Estimate the intensity percentage based on the height relative to the reference metric. For example, if a blue bar is exactly on the white FTP line, it is 100% FTP.`
+Estimate the intensity percentage based on the height relative to the reference metric. For example, if a blue bar is exactly on the white FTP line, it is 100% FTP.`,
             },
             {
               type: "image",
@@ -41,20 +53,28 @@ Estimate the intensity percentage based on the height relative to the reference 
         },
       ],
       schema: z.object({
-        name: z.string().describe("Title of the workout, or 'Extracted Workout'"),
+        name: z
+          .string()
+          .describe("Title of the workout, or 'Extracted Workout'"),
         total_duration_minutes: z.number(),
-        blocks: z.array(z.object({
-          duration_seconds: z.number(),
-          zone: z.string().describe("e.g., Recovery, Tempo, AC, MAP, NM"),
-          intensity_percent: z.number().describe("percentage relative to the reference_metric, e.g., 100"),
-          reference_metric: z.enum(["FTP", "MAP", "AC", "NM"])
-        }))
-      })
-    });
+        blocks: z.array(
+          z.object({
+            duration_seconds: z.number(),
+            zone: z.string().describe("e.g., Recovery, Tempo, AC, MAP, NM"),
+            intensity_percent: z
+              .number()
+              .describe(
+                "percentage relative to the reference_metric, e.g., 100"
+              ),
+            reference_metric: z.enum(["FTP", "MAP", "AC", "NM"]),
+          })
+        ),
+      }),
+    })
 
-    return NextResponse.json(result.object);
+    return NextResponse.json(result.object)
   } catch (error) {
-    console.error("Error extracting workout:", error);
-    return NextResponse.json({ error: String(error) }, { status: 500 });
+    console.error("Error extracting workout:", error)
+    return NextResponse.json({ error: String(error) }, { status: 500 })
   }
 }
