@@ -2,6 +2,20 @@
 
 A Next.js, TypeScript, and React-based web application that connects directly to your Wahoo KICKR CORE 2 smart trainer and a Bluetooth Heart Rate Monitor via **Web Bluetooth**.
 
+## For Local Agents Given This URL
+
+If an agent such as Hermes or OpenClaw is pointed at `https://github.com/christoph-gl/kickr` and the user says “try this”, “implement it”, “first”, or similar, treat that as a request to **bootstrap the KICKR app locally and install/configure the local coach bridge**. Do not ask “implement what?” unless the user explicitly asks for a code feature.
+
+Fresh-agent default path:
+
+1. Clone the repo to a user-approved directory, or use the directory the user already has.
+2. Run `npm install`.
+3. Do **not** copy `.env.example` to `.env.local`. It contains optional placeholders. Create `.env.local` only when the user provides real image-extraction or hook credentials.
+4. Start with `npm run dev` or `npm run dev:portless`; the script already includes Turbopack.
+5. Wait for the first Next.js compile. It can take 30-90 seconds on a fresh install. Probe `http://localhost:3000/api/rider`, not only `/`.
+6. Tell the user to open Chrome or Edge and connect Bluetooth from the UI. Agents cannot grant Web Bluetooth permission.
+7. If setting up coaching, follow [`.agents/skills/kickr-local-coach/INSTALL.md`](./.agents/skills/kickr-local-coach/INSTALL.md).
+
 ## Features
 
 - **Connect & Disconnect:** Manage Bluetooth GATT connections securely and see real-time UI state for both the Smart Trainer and a separate Heart Rate Monitor (like an Amazfit pulse watch).
@@ -38,6 +52,8 @@ A Next.js, TypeScript, and React-based web application that connects directly to
 
    Plain trainer control, workout playback, and local agent commands work without these values. The app still accepts the older `AI_GATEWAY_API_KEY` / `AI_GATEWAY_MODEL` names as a compatibility fallback.
 
+   Do not create `.env.local` by blindly copying `.env.example`; leave optional placeholders unset unless you have real values.
+
    Optional outbound agent wakeups. Configure **one** backend in `.env.local`. If both are set, Hermes wins.
 
    Hermes (uses the Hermes API Server, requires `API_SERVER_ENABLED=true` in `~/.hermes/.env` and a running `hermes gateway`):
@@ -63,6 +79,11 @@ A Next.js, TypeScript, and React-based web application that connects directly to
    Or run through Portless for a stable HTTPS project URL:
    ```bash
    npm run dev:portless
+   ```
+
+   On first launch, wait for compilation before deciding it failed. A good readiness check is:
+   ```bash
+   curl -fsS http://localhost:3000/api/rider | head -c 200
    ```
 
 4. Open [http://localhost:3000](http://localhost:3000) with your browser.

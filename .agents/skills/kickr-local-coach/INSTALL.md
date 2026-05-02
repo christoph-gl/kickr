@@ -11,6 +11,8 @@ This repo is the source of truth for the KICKR local-coach skill. The intent is 
 
 The skill talks to a running Next.js app. If the user does not already have it running, do this first.
 
+If the user only gave the GitHub URL and then says “implement it”, “first”, “try this”, or “set it up”, this Step 0 is the intended default. Do not ask a broad “implement what?” question. Ask only narrow setup questions that block progress, such as the clone location or which agent backend to wire.
+
 1. Check whether the app is already reachable. Either Portless or plain dev server is fine:
 
    ```bash
@@ -46,17 +48,19 @@ The skill talks to a running Next.js app. If the user does not already have it r
    EOF
    ```
 
-   If the user only wants trainer control and local coaching, it is fine to skip this file for now. The KICKR app can still start without image extraction credentials.
+   If the user only wants trainer control and local coaching, it is fine to skip this file for now. The KICKR app can still start without image extraction credentials. Do **not** run `cp .env.example .env.local`; the example file intentionally contains optional placeholders.
 
    Web Bluetooth requires a secure context (HTTPS or `localhost`). If the user has Portless, prefer it for stable HTTPS at `https://kickr.localhost`; otherwise plain `http://localhost:3000` works for dev.
 
-6. Start the dev server in a terminal the user owns. Do not background it from inside the agent — the user needs to keep it visible to grant Bluetooth permission in the browser:
+6. Start the dev server in a terminal the user owns. Do not background it from inside the agent unless the user's tool environment has a proper long-running process manager:
 
    ```bash
    npm run dev          # http://localhost:3000
    # or
    npm run dev:portless # https://kickr.localhost
    ```
+
+   Do not run `npm run dev -- --turbopack`; the script already includes Turbopack. Do not kill the process after a short timeout. A fresh Next.js start can spend 30-90 seconds compiling before the readiness probe succeeds.
 
 7. Tell the user to open the app in Chrome or Edge and connect their KICKR + HRM via the on-screen buttons. Web Bluetooth requires a user gesture; the agent cannot do this.
 
@@ -68,6 +72,8 @@ The skill talks to a running Next.js app. If the user does not already have it r
    ```
 
    A JSON rider profile means the app is up. Move on to Step 1.
+
+   If the root page hangs or returns slowly during first compile, keep waiting and retry `/api/rider`. A 000/connection error during the first minute is not enough evidence that startup failed.
 
 ## Step 1: Pick The Right Skill File
 

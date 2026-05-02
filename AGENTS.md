@@ -2,6 +2,27 @@
 
 This document provides instructions and context for any Large Language Model (LLM) or AI agent working on the KICKR CORE 2 Web Controller project.
 
+## Fresh Public-URL Agent Behavior
+
+If the user gives only the public GitHub URL, or says “try this again”, “implement it”, “first”, or similar after sharing the URL, assume they want the first useful setup path:
+
+1. Clone/open the repo.
+2. Install dependencies with `npm install`.
+3. Start the KICKR app locally.
+4. Verify `GET /api/rider`.
+5. Install the lean Hermes/OpenClaw skill from `.agents/skills/kickr-local-coach/dist/` if the user is using an external coach agent.
+6. Guide the user through browser Bluetooth connection and optional hook/env wiring.
+
+Do not ask “implement what?” for this bootstrap request. Ask a narrow question only when needed, such as where to clone the repo or whether the user wants Hermes or OpenClaw hooks.
+
+Fresh setup footguns:
+- Do not run `cp .env.example .env.local`; `.env.example` contains optional placeholders, not runnable secrets.
+- Do not set both Hermes and OpenClaw hook backends. Hermes wins if both are present.
+- Do not append `-- --turbopack` to `npm run dev`; the script already includes Turbopack.
+- Do not decide the server failed after a short wait. First Next.js compile can take 30-90 seconds.
+- Probe `http://localhost:3000/api/rider` or `https://kickr.localhost/api/rider`, not just the root page.
+- Web Bluetooth must be completed by the user in Chrome or Edge via UI button clicks.
+
 ## Context & Domain
 
 This is a **Next.js (App Router) / React / TypeScript** application interacting directly with a Wahoo KICKR CORE 2 Smart Trainer and an external Bluetooth Heart Rate Monitor (HRM).
