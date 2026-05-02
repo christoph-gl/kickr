@@ -2,7 +2,8 @@ export type KickrHookEvent =
   | { event: "ride_started"; sessionId: string | null; snapshot?: unknown }
   | { event: "ride_ended"; sessionId: string | null; snapshot?: unknown }
   | { event: "rider_feedback"; sessionId: string | null; text: string; snapshot?: unknown }
-  | { event: "coach_check"; sessionId: string | null; snapshot?: unknown };
+  | { event: "coach_check"; sessionId: string | null; snapshot?: unknown }
+  | { event: "plan_refresh"; sessionId: string | null; snapshot?: unknown };
 
 export type OpenClawHookResult =
   | { sent: true }
@@ -49,4 +50,8 @@ export function hookRiderFeedback(
 
 export function hookCoachCheck(sessionId: string | null, snapshot?: unknown) {
   return sendOpenClawHook({ event: "coach_check", sessionId, snapshot });
+}
+
+export function hookPlanRefresh(sessionId: string | null, snapshot?: unknown) {
+  return sendOpenClawHook({ event: "plan_refresh", sessionId, snapshot });
 }

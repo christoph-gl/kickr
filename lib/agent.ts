@@ -44,6 +44,14 @@ export type AgentCommand =
       id?: string;
       type: "stop_trainer";
       reason?: string;
+    }
+  | {
+      id?: string;
+      type: "set_workout_plan";
+      horizonSeconds?: number;
+      leadSeconds?: number;
+      blocks: { durationSeconds: number; targetPower: number }[];
+      reason?: string;
     };
 
 export type AgentCommandStatus = "queued" | "dispatched" | "applied" | "failed";

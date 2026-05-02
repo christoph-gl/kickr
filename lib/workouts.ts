@@ -191,6 +191,47 @@ export async function getSavedWorkouts(): Promise<Workout[]> {
   }
 }
 
+export const ADAPTIVE_FREERIDE_ID = "adaptive-freeride";
+
+export const ADAPTIVE_FREERIDE: Workout = {
+  id: ADAPTIVE_FREERIDE_ID,
+  name: "Adaptive Freeride",
+  description:
+    "LLM-coached freeride starting at 80 W. Plan refreshes every 2 minutes from live telemetry.",
+  blocks: [{ durationSeconds: 60 * 60, targetPower: 80 }],
+};
+
+export function isAdaptiveFreeride(workout: Workout) {
+  return workout.id === ADAPTIVE_FREERIDE_ID;
+}
+
+export function spliceUpcomingBlocks(
+  current: Workout,
+  elapsedSeconds: number,
+  leadSeconds: number,
+  upcoming: WorkoutBlock[]
+): Workout {
+  const splicePoint = Math.max(elapsedSeconds + Math.max(leadSeconds, 0), 0);
+  const kept: WorkoutBlock[] = [];
+  let acc = 0;
+
+  for (const b of current.blocks) {
+    const end = acc + b.durationSeconds;
+    if (end <= splicePoint) {
+      kept.push(b);
+      acc = end;
+      continue;
+    }
+    if (acc < splicePoint) {
+      kept.push({ ...b, durationSeconds: splicePoint - acc });
+      acc = splicePoint;
+    }
+    break;
+  }
+
+  return { ...current, blocks: [...kept, ...upcoming] };
+}
+
 export const WORKOUTS: Workout[] = [
   {
     id: "the-shovel-simulated",

@@ -33,7 +33,48 @@ function isAuthorized(req: Request) {
   return auth === `Bearer ${token}`;
 }
 
+const PLAN_MAX_BLOCKS = 30;
+const PLAN_MIN_BLOCK_SECONDS = 30;
+const PLAN_MIN_WATTS = 40;
+const PLAN_MAX_WATTS = 1000;
+const PLAN_MIN_TOTAL_SECONDS = 60;
+const PLAN_MAX_TOTAL_SECONDS = 30 * 60;
+
+function validateWorkoutPlan(command: AgentCommand): void {
+  if (command.type !== "set_workout_plan") return;
+  if (!Array.isArray(command.blocks) || command.blocks.length === 0) {
+    throw new Error("set_workout_plan requires a non-empty blocks array");
+  }
+  if (command.blocks.length > PLAN_MAX_BLOCKS) {
+    throw new Error(`set_workout_plan blocks exceed limit (${PLAN_MAX_BLOCKS})`);
+  }
+
+  let total = 0;
+  for (const block of command.blocks) {
+    const dur = Number(block?.durationSeconds);
+    const watts = Number(block?.targetPower);
+    if (!Number.isFinite(dur) || dur < PLAN_MIN_BLOCK_SECONDS) {
+      throw new Error(
+        `set_workout_plan block durationSeconds must be >= ${PLAN_MIN_BLOCK_SECONDS}`
+      );
+    }
+    if (!Number.isFinite(watts) || watts < PLAN_MIN_WATTS || watts > PLAN_MAX_WATTS) {
+      throw new Error(
+        `set_workout_plan block targetPower must be in [${PLAN_MIN_WATTS}, ${PLAN_MAX_WATTS}]`
+      );
+    }
+    total += dur;
+  }
+
+  if (total < PLAN_MIN_TOTAL_SECONDS || total > PLAN_MAX_TOTAL_SECONDS) {
+    throw new Error(
+      `set_workout_plan total duration must be in [${PLAN_MIN_TOTAL_SECONDS}, ${PLAN_MAX_TOTAL_SECONDS}] seconds`
+    );
+  }
+}
+
 function normalizeCommand(command: AgentCommand): AgentCommand {
+  validateWorkoutPlan(command);
   return {
     ...command,
     id: command.id || makeAgentCommandId(),

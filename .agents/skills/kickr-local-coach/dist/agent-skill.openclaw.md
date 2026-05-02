@@ -1,7 +1,7 @@
 ---
-kickr-skill-version: 1
+kickr-skill-version: 2
 name: kickr-local-coach
-description: Coach a rider using the KICKR CORE 2 Web Controller. Read live ride context and queue trainer commands or coaching messages over local HTTP. Use when the rider asks for KICKR coaching, ride status, ERG/resistance changes, post-ride summary, or when a KICKR hook wakes you.
+description: Coach a rider using the KICKR CORE 2 Web Controller. Read live ride context and queue trainer commands, coaching messages, or adaptive workout plans over local HTTP. Use when the rider asks for KICKR coaching, ride status, ERG/resistance changes, post-ride summary, or when a KICKR hook (including plan_refresh during adaptive freeride) wakes you.
 ---
 
 # KICKR Local Coach (OpenClaw)
@@ -38,9 +38,16 @@ Send to `POST /api/agent/commands`. Use these names exactly:
 {"type":"set_resistance","percent":35,"reason":"Free ride push"}
 {"type":"start_trainer"}
 {"type":"stop_trainer"}
+{"type":"set_workout_plan","horizonSeconds":600,"leadSeconds":20,"blocks":[{"durationSeconds":120,"targetPower":95},{"durationSeconds":180,"targetPower":110},{"durationSeconds":120,"targetPower":140},{"durationSeconds":180,"targetPower":105}],"reason":"Endurance build, HR steady at 142"}
 ```
 
-Verification: after queueing a trainer command, read `/api/agent/events?limit=10` and look for `command_received` -> `command_applied` -> a fresh `ride_snapshot.activeTrainerMode` matching the request. `command_failed` with `Not connected` means a stale tab consumed the command or the trainer dropped.
+`set_workout_plan` rules (server validates and rejects otherwise):
+- 1–30 blocks. Each `durationSeconds` >= 30. Each `targetPower` in `[40, 1000]` W (further clamped client-side to ~120 % of MAP).
+- Total duration in `[60, 1800]` seconds. The "next 10 minutes" target is `horizonSeconds=600`.
+- The player keeps everything before `now + leadSeconds` and replaces the future with your blocks. Default `leadSeconds=20` absorbs LLM latency.
+- The chart updates instantly when the command is applied.
+
+Verification: after queueing a trainer command, read `/api/agent/events?limit=10` and look for `command_received` -> `command_applied` -> a fresh `ride_snapshot.activeTrainerMode` matching the request. `command_failed` with `Not connected` means a stale tab consumed the command or the trainer dropped. For `set_workout_plan`, expect `command_received` -> `command_applied` and the next `ride_snapshot.activeTrainerMode` to land on the first block's `targetPower` within ~`leadSeconds`.
 
 ## Hook Events That Wake You
 
@@ -49,7 +56,7 @@ The KICKR app calls the mapped OpenClaw hook `POST /hooks/kickr` with `Authoriza
 ```json
 {
   "source": "kickr",
-  "event": "ride_started" | "ride_ended" | "rider_feedback" | "coach_check",
+  "event": "ride_started" | "ride_ended" | "rider_feedback" | "coach_check" | "plan_refresh",
   "timestamp": 1777600000000,
   "sessionId": "ride-...",
   "snapshot": { "...": "..." },
@@ -59,12 +66,43 @@ The KICKR app calls the mapped OpenClaw hook `POST /hooks/kickr` with `Authoriza
 }
 ```
 
-On wake:
+On wake (non-adaptive events):
 
 1. `GET /api/rider`
 2. `GET /api/agent/events?limit=200`
 3. Decide: send a message, queue a trainer command, or do nothing.
 4. Keep responses short during a ride.
+
+### `plan_refresh` (Adaptive Freeride)
+
+Fires every 2 minutes while the rider has the **Adaptive Freeride** session playing. Snapshot includes:
+
+```json
+{
+  "adaptive": true,
+  "elapsedSeconds": 480,
+  "horizonSeconds": 600,
+  "currentBlock": {"durationSeconds": 180, "targetPower": 110},
+  "remainingPlannedSeconds": 240,
+  "lastPlanReceivedAt": 1777600000000,
+  "latestSample": {"powerW": 108, "cadenceRpm": 88, "heartRateBpm": 142},
+  "activeTrainerMode": {"type": "erg", "watts": 110}
+}
+```
+
+On `plan_refresh` you MUST:
+
+1. Read `/api/rider` and `/api/agent/events?limit=20` for HR/cadence trend.
+2. Queue **exactly one** `set_workout_plan` for the next ~600 s of riding.
+3. Be conservative on the first block: it executes ~20 s from now, so don't make it a giant jump from `currentBlock.targetPower`.
+4. If unsure, hold the current target — emit one block at the current watts for the full horizon.
+
+Plan-shaping defaults:
+
+- Adjacent blocks should not differ by more than ±40 W unless the rider explicitly asked for intervals.
+- Block duration >= 30 s, prefer 60–300 s for endurance work.
+- Stay below ~120 % of `riderProfile.fourDP.map`; the player will clamp anything higher.
+- If HR is climbing fast (>5 bpm/min) at moderate power, ease off; if HR is well below the target zone, lift one notch.
 
 ## Coaching Loop
 

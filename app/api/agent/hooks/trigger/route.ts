@@ -8,7 +8,8 @@ function isKnownHookEvent(payload: KickrHookEvent) {
     payload.event === "ride_started" ||
     payload.event === "ride_ended" ||
     payload.event === "rider_feedback" ||
-    payload.event === "coach_check"
+    payload.event === "coach_check" ||
+    payload.event === "plan_refresh"
   );
 }
 

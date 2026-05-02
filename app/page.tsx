@@ -8,7 +8,7 @@ import { Cog } from "lucide-react";
 import { getRiderProfile, RIDER_PROFILE, saveRiderProfile, type RiderProfile } from "@/lib/profile";
 import type { AgentCommand, AgentEvent } from "@/lib/agent";
 import { hookCoachCheck, hookRideEnded, hookRideStarted } from "@/lib/openclaw-hooks";
-import { WorkoutPlayer } from "@/components/workout-player";
+import { WorkoutPlayer, type WorkoutPlayerHandle } from "@/components/workout-player";
 import { 
   RideSession, 
   saveRideSession, 
@@ -65,6 +65,7 @@ export default function App() {
   const [sessions, setSessions] = useState<RideSession[]>([]);
   const currentSessionFilenameRef = useRef<string | null>(null);
   const activeWorkoutNameRef = useRef<string>("Manual Ride");
+  const workoutPlayerRef = useRef<WorkoutPlayerHandle | null>(null);
   const unsavedSamplesRef = useRef<any[]>([]);
   const pollingAgentCommandsRef = useRef(false);
   const activeHookSessionRef = useRef<string | null>(null);
@@ -122,6 +123,10 @@ export default function App() {
     if (command.type === "send_message") return command.text;
     if (command.type === "start_trainer") return "Start trainer";
     if (command.type === "stop_trainer") return "Stop trainer";
+    if (command.type === "set_workout_plan") {
+      const total = command.blocks.reduce((s, b) => s + (b.durationSeconds || 0), 0);
+      return `New plan: ${command.blocks.length} blocks, ${Math.round(total / 60)} min`;
+    }
     return "Agent command";
   };
 
@@ -400,6 +405,14 @@ export default function App() {
         await clientRef.current.start();
       } else if (command.type === "stop_trainer") {
         await clientRef.current.stop();
+      } else if (command.type === "set_workout_plan") {
+        if (!workoutPlayerRef.current) {
+          throw new Error("Workout player not ready to apply plan");
+        }
+        workoutPlayerRef.current.applyPlanCommand(
+          command.blocks,
+          typeof command.leadSeconds === "number" ? command.leadSeconds : 20
+        );
       } else {
         const unsupported = command as { type?: string };
         throw new Error(`Unsupported agent command: ${unsupported.type ?? "unknown"}`);
@@ -1064,11 +1077,14 @@ export default function App() {
 
       {/* Right Column - Workout Player */}
       <div className="hidden lg:flex min-w-0 flex-col gap-6 w-full max-w-4xl">
-        <WorkoutPlayer 
-           disabled={connectionState !== "connected"} 
-           onPowerTargetChange={applyTargetPower} 
+        <WorkoutPlayer
+           ref={workoutPlayerRef}
+           disabled={connectionState !== "connected"}
+           onPowerTargetChange={applyTargetPower}
            onStopSession={handleStopSession}
            onWorkoutChange={(w) => activeWorkoutNameRef.current = w.name}
+           getPlanRefreshSnapshot={getHookSnapshot}
+           sessionId={currentSessionFilenameRef.current}
            power={power}
            cadence={cadence}
            heartRate={heartRate}

@@ -1,11 +1,25 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { WORKOUTS, Workout, parseLLMWorkout, saveWorkout, getSavedWorkouts, updateWorkout, parseZwoWorkout, calculateWorkoutMetrics } from "@/lib/workouts";
+import { useState, useEffect, useRef, forwardRef, useImperativeHandle, useCallback } from "react";
+import {
+  WORKOUTS,
+  Workout,
+  WorkoutBlock,
+  parseLLMWorkout,
+  saveWorkout,
+  getSavedWorkouts,
+  updateWorkout,
+  parseZwoWorkout,
+  calculateWorkoutMetrics,
+  ADAPTIVE_FREERIDE,
+  isAdaptiveFreeride,
+  spliceUpcomingBlocks,
+} from "@/lib/workouts";
 import { WorkoutChart } from "./workout-chart";
 import { Button } from "./ui/button";
 import { RIDER_PROFILE, type RiderProfile } from "@/lib/profile";
 import { audioService } from "@/lib/audio";
+import { hookPlanRefresh } from "@/lib/openclaw-hooks";
 import {
   Dialog,
   DialogContent,
@@ -15,21 +29,16 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 
-export function WorkoutPlayer({ 
-  onPowerTargetChange,
-  onStopSession,
-  onWorkoutChange,
-  disabled,
-  power,
-  cadence,
-  heartRate,
-  currentHrZone,
-  activeTrainerMode,
-  riderProfile = RIDER_PROFILE,
-}: { 
+export type WorkoutPlayerHandle = {
+  applyPlanCommand: (blocks: WorkoutBlock[], leadSeconds?: number) => void;
+};
+
+type WorkoutPlayerProps = {
   onPowerTargetChange: (watts: number) => void;
   onStopSession: (workoutName: string) => void;
   onWorkoutChange?: (workout: Workout) => void;
+  getPlanRefreshSnapshot?: () => unknown;
+  sessionId?: string | null;
   disabled: boolean;
   power?: number;
   cadence?: number;
@@ -37,7 +46,25 @@ export function WorkoutPlayer({
   currentHrZone?: any;
   activeTrainerMode: any;
   riderProfile?: RiderProfile;
-}) {
+};
+
+export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>(function WorkoutPlayer(
+  {
+    onPowerTargetChange,
+    onStopSession,
+    onWorkoutChange,
+    getPlanRefreshSnapshot,
+    sessionId,
+    disabled,
+    power,
+    cadence,
+    heartRate,
+    currentHrZone,
+    activeTrainerMode,
+    riderProfile = RIDER_PROFILE,
+  },
+  ref,
+) {
   const [allWorkouts, setAllWorkouts] = useState<Workout[]>(WORKOUTS);
   const [workout, setWorkout] = useState<Workout>(WORKOUTS[0]);
 
@@ -52,9 +79,53 @@ export function WorkoutPlayer({
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [upcomingChange, setUpcomingChange] = useState<{ nextTarget: number, currentTarget: number, seconds: number } | null>(null);
   const lastTargetRef = useRef<number | null>(null);
+  const elapsedSecondsRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const zwoFileInputRef = useRef<HTMLInputElement>(null);
   const wakeLockRef = useRef<any>(null);
+  const [lastPlanReceivedAt, setLastPlanReceivedAt] = useState<number | null>(null);
+  const [nextRefreshAt, setNextRefreshAt] = useState<number | null>(null);
+  const [now, setNow] = useState<number>(() => Date.now());
+  const adaptive = isAdaptiveFreeride(workout);
+
+  useEffect(() => {
+    elapsedSecondsRef.current = elapsedSeconds;
+  }, [elapsedSeconds]);
+
+  const clampPlanWatts = useCallback(
+    (watts: number) => {
+      const ceiling = Math.max(120, Math.round(riderProfile.fourDP.map * 1.2));
+      return Math.max(40, Math.min(watts, ceiling));
+    },
+    [riderProfile.fourDP.map]
+  );
+
+  const applyPlanCommand = useCallback(
+    (blocks: WorkoutBlock[], leadSeconds: number = 20) => {
+      if (!Array.isArray(blocks) || blocks.length === 0) return;
+      const safeBlocks: WorkoutBlock[] = blocks
+        .map((b) => ({
+          durationSeconds: Math.max(30, Math.round(Number(b.durationSeconds) || 0)),
+          targetPower: clampPlanWatts(Math.round(Number(b.targetPower) || 0)),
+        }))
+        .filter((b) => b.durationSeconds > 0);
+      if (safeBlocks.length === 0) return;
+
+      setWorkout((prev) =>
+        spliceUpcomingBlocks(prev, elapsedSecondsRef.current, leadSeconds, safeBlocks)
+      );
+      setLastPlanReceivedAt(Date.now());
+    },
+    [clampPlanWatts]
+  );
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      applyPlanCommand,
+    }),
+    [applyPlanCommand]
+  );
 
   // Wake Lock implementation
   const requestWakeLock = async () => {
@@ -119,6 +190,82 @@ export function WorkoutPlayer({
     }
     return () => clearInterval(interval);
   }, [isPlaying]);
+
+  // Refs to keep the plan_refresh ticker stable. Without these the effect
+  // tore down and re-fired every time `workout` or `lastPlanReceivedAt`
+  // changed (i.e. every time the agent applied a plan), causing a feedback
+  // loop of wake-ups.
+  const workoutRef = useRef(workout);
+  useEffect(() => {
+    workoutRef.current = workout;
+  }, [workout]);
+
+  const lastPlanReceivedAtRef = useRef<number | null>(null);
+  useEffect(() => {
+    lastPlanReceivedAtRef.current = lastPlanReceivedAt;
+  }, [lastPlanReceivedAt]);
+
+  const planSnapshotGetterRef = useRef(getPlanRefreshSnapshot);
+  useEffect(() => {
+    planSnapshotGetterRef.current = getPlanRefreshSnapshot;
+  }, [getPlanRefreshSnapshot]);
+
+  // Adaptive freeride: fire plan_refresh hook every 2 min while playing.
+  useEffect(() => {
+    if (!adaptive || !isPlaying) {
+      setNextRefreshAt(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    const fire = () => {
+      if (cancelled) return;
+      const horizonSeconds = 600;
+      const baseSnapshot = (planSnapshotGetterRef.current?.() ?? {}) as Record<string, unknown>;
+
+      const blocks = workoutRef.current.blocks;
+      let acc = 0;
+      let remaining = 0;
+      let currentBlock: WorkoutBlock | null = null;
+      for (const b of blocks) {
+        const end = acc + b.durationSeconds;
+        if (elapsedSecondsRef.current < end) {
+          if (!currentBlock) currentBlock = b;
+          remaining += end - Math.max(elapsedSecondsRef.current, acc);
+        }
+        acc = end;
+      }
+
+      hookPlanRefresh(sessionId ?? null, {
+        ...baseSnapshot,
+        adaptive: true,
+        elapsedSeconds: elapsedSecondsRef.current,
+        horizonSeconds,
+        currentBlock,
+        remainingPlannedSeconds: remaining,
+        lastPlanReceivedAt: lastPlanReceivedAtRef.current,
+      });
+
+      setNextRefreshAt(Date.now() + 120_000);
+    };
+
+    // Fire once on entering adaptive play state, then every 2 min.
+    fire();
+    const interval = setInterval(fire, 120_000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [adaptive, isPlaying, sessionId]);
+
+  // Lightweight 1s tick to drive the "next refresh in N s" badge.
+  useEffect(() => {
+    if (!adaptive || !isPlaying) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [adaptive, isPlaying]);
 
   useEffect(() => {
     if (!isPlaying) return;
@@ -309,6 +456,15 @@ export function WorkoutPlayer({
           <h2 className="text-2xl font-bold">Workout Player</h2>
           <div className="flex items-center gap-2 px-3 py-1.5 border rounded-md bg-muted/20">
             <span className="font-bold text-sm truncate max-w-[250px]">{workout.name}</span>
+            {adaptive && isPlaying && (
+              <span className="text-[10px] font-medium uppercase tracking-wider text-primary">
+                {nextRefreshAt
+                  ? `next refresh in ${Math.max(0, Math.ceil((nextRefreshAt - now) / 1000))}s`
+                  : lastPlanReceivedAt
+                  ? "plan active"
+                  : "awaiting plan"}
+              </span>
+            )}
             {workout.id.startsWith("imported-") && (
               <button
                 className="text-muted-foreground hover:text-foreground transition-colors"
@@ -330,6 +486,19 @@ export function WorkoutPlayer({
           </div>
         </div>
         <div className="flex gap-2 items-center">
+          <Button
+            variant={adaptive ? "default" : "outline"}
+            size="sm"
+            onClick={() => {
+              setWorkout(ADAPTIVE_FREERIDE);
+              handleStop();
+              setLastPlanReceivedAt(null);
+            }}
+            disabled={isPlaying}
+            title="Start an LLM-coached freeride. Begins at 80 W; the agent updates the plan every 2 minutes."
+          >
+            {adaptive ? "Adaptive Loaded" : "Adaptive Freeride"}
+          </Button>
           <Dialog open={isPickerOpen} onOpenChange={setIsPickerOpen}>
             <DialogTrigger asChild>
               <Button variant="outline" size="sm">Change Workout</Button>
@@ -540,4 +709,4 @@ export function WorkoutPlayer({
       </div>
     </div>
   );
-}
+});
