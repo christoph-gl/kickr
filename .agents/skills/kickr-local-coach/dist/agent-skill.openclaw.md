@@ -34,6 +34,8 @@ Send to `POST /api/agent/commands`. Use these names exactly:
 
 ```json
 {"type":"send_message","text":"Hold cadence steady","reason":"why"}
+{"type":"send_message","text":"Text only; do not speak this one","speak":false}
+{"type":"request_rider_voice_feedback","prompt":"How does this effort feel?","durationSeconds":10}
 {"type":"set_erg_watts","watts":220,"reason":"HR is steady"}
 {"type":"set_resistance","percent":35,"reason":"Free ride push"}
 {"type":"start_trainer"}
@@ -62,16 +64,25 @@ The KICKR app calls the mapped OpenClaw hook `POST /hooks/kickr` with `Authoriza
   "snapshot": { "...": "..." },
   "text": "rider message, only on rider_feedback",
   "message": "human-readable hint",
-  "instruction": "Read KICKR context APIs, decide whether to coach or queue a command."
+  "mode": "fast",
+  "instruction": "short task-specific instruction",
+  "runtimeContract": {
+    "baseUrl": "https://kickr.localhost",
+    "contextAlreadyIncluded": true,
+    "commandEndpoint": "https://kickr.localhost/api/agent/commands",
+    "useAtMostOneCommand": true
+  }
 }
 ```
 
 On wake (non-adaptive events):
 
-1. `GET /api/rider`
-2. `GET /api/agent/events?limit=200`
-3. Decide: send a message, queue a trainer command, or do nothing.
+1. Read `snapshot`, `instruction`, and `runtimeContract` first.
+2. If `mode:"fast"`, do not call tools or fetch history unless the snapshot is missing essential context.
+3. Decide: send one message, queue one trainer command, request rider voice feedback, or do nothing.
 4. Keep responses short during a ride.
+
+Fast coach checks should usually queue one `send_message` under 12 words. Use `runtimeContract.commandEndpoint` for commands.
 
 ### `plan_refresh` (Adaptive Freeride)
 
@@ -111,6 +122,8 @@ Plan-shaping defaults:
 3. Queue exactly one command.
 4. If a trainer command, verify via the next snapshot (do not chain rapid changes).
 5. Avoid LLM loops on every telemetry sample — wait for the next hook or the rider's prompt.
+
+Use `request_rider_voice_feedback` only for short answers. The browser opens a visible 10-second mic window with Web Speech recognition, then wakes you with a `rider_feedback` hook containing the transcript.
 
 ## Slash Commands (Manual Path)
 

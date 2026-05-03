@@ -4,10 +4,10 @@ import { useRef, useState, useEffect } from "react";
 import { KickrCore2Client } from "@/lib/kickr-client";
 import { HeartRateClient } from "@/lib/hr-client";
 import { Button } from "@/components/ui/button";
-import { Cog } from "lucide-react";
+import { Cog, LoaderCircle, Mic, MicOff, Volume2, VolumeX } from "lucide-react";
 import { getRiderProfile, RIDER_PROFILE, saveRiderProfile, type RiderProfile } from "@/lib/profile";
 import type { AgentCommand, AgentEvent } from "@/lib/agent";
-import { hookCoachCheck, hookRideEnded, hookRideStarted } from "@/lib/openclaw-hooks";
+import { hookCoachCheck, hookRideEnded, hookRideStarted, hookRiderFeedback } from "@/lib/openclaw-hooks";
 import { WorkoutPlayer, type WorkoutPlayerHandle } from "@/components/workout-player";
 import { 
   RideSession, 
@@ -36,6 +36,55 @@ type AgentJournalEntry = {
   status: "received" | "applied" | "failed";
   message?: string;
 };
+type CoachCheckState = {
+  status: "idle" | "pending" | "sent" | "skipped" | "error";
+  message: string;
+  target?: string;
+  targetUrl?: string;
+};
+type RiderVoiceFeedbackState = {
+  status: "idle" | "listening" | "sending" | "sent" | "error" | "unsupported";
+  prompt: string;
+  transcript: string;
+  remainingSeconds: number;
+  message: string;
+  target?: string;
+};
+type BrowserSpeechRecognitionAlternative = {
+  transcript: string;
+};
+type BrowserSpeechRecognitionResult = {
+  isFinal: boolean;
+  length: number;
+  [index: number]: BrowserSpeechRecognitionAlternative;
+};
+type BrowserSpeechRecognitionEvent = {
+  resultIndex: number;
+  results: {
+    length: number;
+    [index: number]: BrowserSpeechRecognitionResult;
+  };
+};
+type BrowserSpeechRecognitionErrorEvent = {
+  error: string;
+  message?: string;
+};
+type BrowserSpeechRecognition = {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+  onresult: ((event: BrowserSpeechRecognitionEvent) => void) | null;
+  onerror: ((event: BrowserSpeechRecognitionErrorEvent) => void) | null;
+  onend: (() => void) | null;
+};
+type SpeechRecognitionWindow = Window &
+  typeof globalThis & {
+    SpeechRecognition?: new () => BrowserSpeechRecognition;
+    webkitSpeechRecognition?: new () => BrowserSpeechRecognition;
+  };
 
 export default function App() {
   const clientRef = useRef(new KickrCore2Client());
@@ -61,6 +110,20 @@ export default function App() {
   const [activeTrainerMode, setActiveTrainerMode] = useState<ActiveTrainerMode>({ type: "none" });
   const [agentJournal, setAgentJournal] = useState<AgentJournalEntry[]>([]);
   const [agentMessage, setAgentMessage] = useState<string | null>(null);
+  const [coachCheckState, setCoachCheckState] = useState<CoachCheckState>({
+    status: "idle",
+    message: "No coach check sent yet.",
+  });
+  const [voiceFeedbackEnabled, setVoiceFeedbackEnabled] = useState(false);
+  const [speechSupported, setSpeechSupported] = useState(false);
+  const [riderVoiceFeedback, setRiderVoiceFeedback] =
+    useState<RiderVoiceFeedbackState>({
+      status: "idle",
+      prompt: "",
+      transcript: "",
+      remainingSeconds: 0,
+      message: "No rider voice request yet.",
+    });
 
   const [sessions, setSessions] = useState<RideSession[]>([]);
   const currentSessionFilenameRef = useRef<string | null>(null);
@@ -69,6 +132,16 @@ export default function App() {
   const unsavedSamplesRef = useRef<any[]>([]);
   const pollingAgentCommandsRef = useRef(false);
   const activeHookSessionRef = useRef<string | null>(null);
+  const lastSpokenAgentMessageRef = useRef<{ text: string; timestamp: number } | null>(null);
+  const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const speechTimeoutRef = useRef<number | null>(null);
+  const speechCountdownRef = useRef<number | null>(null);
+  const riderVoiceFeedbackRef = useRef({
+    active: false,
+    prompt: "",
+    transcript: "",
+    finalized: false,
+  });
 
   useEffect(() => {
     getSavedRideSessions().then(setSessions);
@@ -76,6 +149,17 @@ export default function App() {
       setRiderProfile(profile);
       setSettingsProfile(profile);
     });
+
+    const hydrateVoiceFeedback = window.setTimeout(() => {
+      setSpeechSupported(
+        "speechSynthesis" in window && "SpeechSynthesisUtterance" in window
+      );
+      setVoiceFeedbackEnabled(
+        window.localStorage.getItem("kickr.voiceFeedbackEnabled") === "true"
+      );
+    }, 0);
+
+    return () => window.clearTimeout(hydrateVoiceFeedback);
   }, []);
 
   const logSamples = async (samples: any[], isNew: boolean, finalMetrics?: any) => {
@@ -121,6 +205,9 @@ export default function App() {
       return `Set resistance to ${command.percent ?? command.level}%`;
     }
     if (command.type === "send_message") return command.text;
+    if (command.type === "request_rider_voice_feedback") {
+      return command.prompt || "Request rider voice feedback";
+    }
     if (command.type === "start_trainer") return "Start trainer";
     if (command.type === "stop_trainer") return "Stop trainer";
     if (command.type === "set_workout_plan") {
@@ -223,13 +310,378 @@ export default function App() {
     }
   };
 
+  const speakAgentMessage = (text: string, force = false) => {
+    if ((!voiceFeedbackEnabled && !force) || !speechSupported) return;
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+
+    const spokenText = text.trim().replace(/\s+/g, " ").slice(0, 240);
+    if (!spokenText) return;
+
+    const now = Date.now();
+    const last = lastSpokenAgentMessageRef.current;
+    if (!force && last?.text === spokenText && now - last.timestamp < 30_000) return;
+
+    lastSpokenAgentMessageRef.current = { text: spokenText, timestamp: now };
+    window.speechSynthesis.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(spokenText);
+    utterance.lang = navigator.language || "en-US";
+    utterance.rate = 0.95;
+    utterance.pitch = 1;
+    utterance.volume = 0.9;
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const handleVoiceFeedbackToggle = (enabled: boolean) => {
+    setVoiceFeedbackEnabled(enabled);
+    window.localStorage.setItem("kickr.voiceFeedbackEnabled", String(enabled));
+
+    if (!enabled) {
+      window.speechSynthesis?.cancel();
+      return;
+    }
+
+    speakAgentMessage("Voice feedback enabled.", true);
+  };
+
+  const getSpeechRecognitionConstructor = () => {
+    const speechWindow = window as SpeechRecognitionWindow;
+    return speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition;
+  };
+
+  const clearSpeechTimers = () => {
+    if (speechTimeoutRef.current) {
+      window.clearTimeout(speechTimeoutRef.current);
+      speechTimeoutRef.current = null;
+    }
+    if (speechCountdownRef.current) {
+      window.clearInterval(speechCountdownRef.current);
+      speechCountdownRef.current = null;
+    }
+  };
+
+  const stopRiderVoiceFeedback = () => {
+    clearSpeechTimers();
+    speechRecognitionRef.current?.stop();
+  };
+
+  const cancelRiderVoiceFeedback = () => {
+    riderVoiceFeedbackRef.current.active = false;
+    riderVoiceFeedbackRef.current.finalized = true;
+    clearSpeechTimers();
+    speechRecognitionRef.current?.abort();
+    setRiderVoiceFeedback((state) => ({
+      ...state,
+      status: "idle",
+      remainingSeconds: 0,
+      message: "Voice feedback canceled.",
+    }));
+  };
+
+  const finalizeRiderVoiceFeedback = async () => {
+    const feedback = riderVoiceFeedbackRef.current;
+    if (!feedback.active || feedback.finalized) return;
+
+    feedback.active = false;
+    feedback.finalized = true;
+    clearSpeechTimers();
+
+    const text = feedback.transcript.trim().replace(/\s+/g, " ");
+    if (!text) {
+      setRiderVoiceFeedback((state) => ({
+        ...state,
+        status: "error",
+        remainingSeconds: 0,
+        message: "No speech was recognized. Try a short phrase like hard, okay, or stop.",
+      }));
+      return;
+    }
+
+    setRiderVoiceFeedback((state) => ({
+      ...state,
+      status: "sending",
+      transcript: text,
+      remainingSeconds: 0,
+      message: "Sending rider feedback to coach...",
+    }));
+
+    await logAgentEvent({
+      type: "rider_feedback",
+      sessionId: currentSessionFilenameRef.current,
+      timestamp: Date.now(),
+      text,
+    });
+
+    const result = await hookRiderFeedback(
+      currentSessionFilenameRef.current,
+      text,
+      {
+        ...getHookSnapshot(),
+        riderVoiceFeedback: {
+          prompt: feedback.prompt,
+          transcriptionMode: "browser",
+        },
+      }
+    );
+
+    if ("sent" in result) {
+      setRiderVoiceFeedback((state) => ({
+        ...state,
+        status: "sent",
+        target: result.target,
+        message: `Sent to ${result.target}.`,
+      }));
+      return;
+    }
+
+    if ("skipped" in result) {
+      setRiderVoiceFeedback((state) => ({
+        ...state,
+        status: "error",
+        message: "Transcript captured, but no coach hook backend is configured.",
+      }));
+      return;
+    }
+
+    setRiderVoiceFeedback((state) => ({
+      ...state,
+      status: "error",
+      target: result.target,
+      message: result.error,
+    }));
+  };
+
+  const startRiderVoiceFeedbackWindow = (command: AgentCommand) => {
+    if (command.type !== "request_rider_voice_feedback") return;
+
+    const Recognition = getSpeechRecognitionConstructor();
+    if (!Recognition) {
+      setRiderVoiceFeedback({
+        status: "unsupported",
+        prompt: command.prompt || "How does this effort feel?",
+        transcript: "",
+        remainingSeconds: 0,
+        message:
+          "Browser speech recognition is unavailable. Use Chrome or Edge for voice feedback.",
+      });
+      return;
+    }
+
+    if (command.transcriptionMode && command.transcriptionMode !== "browser") {
+      setRiderVoiceFeedback({
+        status: "unsupported",
+        prompt: command.prompt || "How does this effort feel?",
+        transcript: "",
+        remainingSeconds: 0,
+        message: "Only browser speech recognition is currently wired in this app.",
+      });
+      return;
+    }
+
+    const prompt = command.prompt || "How does this effort feel?";
+    const durationSeconds = Math.min(
+      10,
+      Math.max(3, Math.round(command.durationSeconds ?? 10))
+    );
+    const recognition = new Recognition();
+    let finalTranscript = "";
+    let interimTranscript = "";
+
+    clearSpeechTimers();
+    speechRecognitionRef.current?.abort();
+    speechRecognitionRef.current = recognition;
+    riderVoiceFeedbackRef.current = {
+      active: true,
+      prompt,
+      transcript: "",
+      finalized: false,
+    };
+
+    setRiderVoiceFeedback({
+      status: "listening",
+      prompt,
+      transcript: "",
+      remainingSeconds: durationSeconds,
+      message: "Listening...",
+    });
+
+    speakAgentMessage(prompt);
+
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = navigator.language || "en-US";
+
+    recognition.onresult = (event) => {
+      interimTranscript = "";
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        const result = event.results[i];
+        const transcript = result[0]?.transcript || "";
+        if (result.isFinal) {
+          finalTranscript += `${transcript} `;
+        } else {
+          interimTranscript += transcript;
+        }
+      }
+
+      const transcript = `${finalTranscript}${interimTranscript}`.trim();
+      riderVoiceFeedbackRef.current.transcript = transcript;
+      setRiderVoiceFeedback((state) => ({ ...state, transcript }));
+    };
+
+    recognition.onerror = (event) => {
+      riderVoiceFeedbackRef.current.active = false;
+      riderVoiceFeedbackRef.current.finalized = true;
+      clearSpeechTimers();
+      setRiderVoiceFeedback((state) => ({
+        ...state,
+        status: "error",
+        remainingSeconds: 0,
+        message: event.message || `Speech recognition failed: ${event.error}`,
+      }));
+    };
+
+    recognition.onend = () => {
+      finalizeRiderVoiceFeedback();
+    };
+
+    speechCountdownRef.current = window.setInterval(() => {
+      setRiderVoiceFeedback((state) => ({
+        ...state,
+        remainingSeconds: Math.max(0, state.remainingSeconds - 1),
+      }));
+    }, 1000);
+
+    speechTimeoutRef.current = window.setTimeout(() => {
+      stopRiderVoiceFeedback();
+    }, durationSeconds * 1000);
+
+    try {
+      recognition.start();
+    } catch (error) {
+      riderVoiceFeedbackRef.current.active = false;
+      riderVoiceFeedbackRef.current.finalized = true;
+      clearSpeechTimers();
+      setRiderVoiceFeedback((state) => ({
+        ...state,
+        status: "error",
+        remainingSeconds: 0,
+        message: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  };
+
+  const extractHookRunId = (response: unknown) => {
+    if (!response || typeof response !== "object") return undefined;
+    const record = response as Record<string, unknown>;
+    const id = record.id || record.run_id || record.runId;
+    return typeof id === "string" ? id : undefined;
+  };
+
+  const requestCoachCheck = async () => {
+    setCoachCheckState({
+      status: "pending",
+      message: "Sending coach check...",
+    });
+
+    const result = await hookCoachCheck(
+      currentSessionFilenameRef.current,
+      getHookSnapshot()
+    );
+
+    if ("sent" in result) {
+      const runId = extractHookRunId(result.response);
+      setCoachCheckState({
+        status: "sent",
+        target: result.target,
+        targetUrl: result.targetUrl,
+        message: runId
+          ? `Forwarded to ${result.target}; run ${runId} was accepted.`
+          : `Forwarded to ${result.target}. Waiting for the agent to queue a message or command.`,
+      });
+      return;
+    }
+
+    if ("skipped" in result) {
+      setCoachCheckState({
+        status: "skipped",
+        message:
+          "No hook backend is configured. Set Hermes or OpenClaw env vars and restart Next.js.",
+      });
+      return;
+    }
+
+    setCoachCheckState({
+      status: "error",
+      target: result.target,
+      targetUrl: result.targetUrl,
+      message: result.error,
+    });
+  };
+
+  const requestManualRiderVoiceFeedback = () => {
+    startRiderVoiceFeedbackWindow({
+      type: "request_rider_voice_feedback",
+      prompt: "What should the coach know?",
+      durationSeconds: 10,
+      reason: "Manual rider voice note",
+    });
+  };
+
   const currentHrZone = heartRate 
     ? riderProfile.hrZones.find(z => heartRate >= z.minBpm && heartRate <= z.maxBpm) 
     : undefined;
 
+  const averageRecentSampleValue = (
+    samples: typeof clientRef.current.samples,
+    windowMs: number,
+    key: "powerW" | "cadenceRpm" | "heartRateBpm"
+  ) => {
+    const cutoff = Date.now() - windowMs;
+    const values = samples
+      .filter((sample) => sample.timestamp >= cutoff)
+      .map((sample) => sample[key])
+      .filter((value): value is number => typeof value === "number");
+
+    if (values.length === 0) return null;
+    return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
+  };
+
+  const getHeartRateTrend = (samples: typeof clientRef.current.samples) => {
+    const cutoff = Date.now() - 60_000;
+    const values = samples
+      .filter(
+        (sample) =>
+          sample.timestamp >= cutoff && typeof sample.heartRateBpm === "number"
+      )
+      .map((sample) => ({
+        timestamp: sample.timestamp,
+        heartRateBpm: sample.heartRateBpm as number,
+      }));
+
+    if (values.length < 2) return null;
+
+    const first = values[0];
+    const last = values[values.length - 1];
+    const minutes = (last.timestamp - first.timestamp) / 60_000;
+    if (minutes <= 0) return null;
+
+    return Number(((last.heartRateBpm - first.heartRateBpm) / minutes).toFixed(1));
+  };
+
+  const getRollingSnapshot = (samples: typeof clientRef.current.samples) => ({
+    powerAvg15s: averageRecentSampleValue(samples, 15_000, "powerW"),
+    powerAvg60s: averageRecentSampleValue(samples, 60_000, "powerW"),
+    cadenceAvg15s: averageRecentSampleValue(samples, 15_000, "cadenceRpm"),
+    cadenceAvg60s: averageRecentSampleValue(samples, 60_000, "cadenceRpm"),
+    heartRateAvg15s: averageRecentSampleValue(samples, 15_000, "heartRateBpm"),
+    heartRateAvg60s: averageRecentSampleValue(samples, 60_000, "heartRateBpm"),
+    heartRateTrendBpmPerMin: getHeartRateTrend(samples),
+  });
+
   const getHookSnapshot = () => {
     const samples = clientRef.current.samples;
     const latestSample = samples.length > 0 ? samples[samples.length - 1] : undefined;
+    const lastAgentEntry = agentJournal[0];
 
     return {
       activeTrainerMode,
@@ -238,6 +690,24 @@ export default function App() {
       sampleCount: samples.length,
       connectionState,
       hrConnectionState,
+      currentHrZone,
+      rolling: getRollingSnapshot(samples),
+      riderProfile: {
+        ftp: riderProfile.fourDP.ftp,
+        map: riderProfile.fourDP.map,
+        ac: riderProfile.fourDP.ac,
+        nm: riderProfile.fourDP.nm,
+        cTHR: riderProfile.cTHR,
+        memorySummary: riderProfile.memorySummary,
+      },
+      lastAgentEntry: lastAgentEntry
+        ? {
+            label: lastAgentEntry.label,
+            status: lastAgentEntry.status,
+            reason: lastAgentEntry.reason,
+            message: lastAgentEntry.message,
+          }
+        : null,
     };
   };
 
@@ -401,6 +871,11 @@ export default function App() {
         await setTrainerResistance(level);
       } else if (command.type === "send_message") {
         setAgentMessage(command.text);
+        if (command.speak !== false) {
+          speakAgentMessage(command.text);
+        }
+      } else if (command.type === "request_rider_voice_feedback") {
+        startRiderVoiceFeedbackWindow(command);
       } else if (command.type === "start_trainer") {
         await clientRef.current.start();
       } else if (command.type === "stop_trainer") {
@@ -937,9 +1412,40 @@ export default function App() {
                   Local command inbox: <span className="font-mono">/api/agent/commands</span>
                 </p>
               </div>
-              <span className="rounded-sm bg-muted px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                Direct
-              </span>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant={voiceFeedbackEnabled ? "secondary" : "outline"}
+                  size="icon-sm"
+                  aria-label={voiceFeedbackEnabled ? "Disable voice feedback" : "Enable voice feedback"}
+                  title={speechSupported ? "Voice feedback" : "Voice feedback is not supported in this browser"}
+                  disabled={!speechSupported}
+                  onClick={() => handleVoiceFeedbackToggle(!voiceFeedbackEnabled)}
+                >
+                  {voiceFeedbackEnabled ? <Volume2 /> : <VolumeX />}
+                </Button>
+                <span className="rounded-sm bg-muted px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                  Direct
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/20 px-3 py-2">
+              <div className="min-w-0">
+                <div className="text-xs font-semibold">Voice feedback</div>
+                <div className="text-[11px] text-muted-foreground">
+                  {speechSupported ? (voiceFeedbackEnabled ? "On" : "Off") : "Unavailable"}
+                </div>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                disabled={!speechSupported || !voiceFeedbackEnabled}
+                onClick={() => speakAgentMessage("KICKR voice feedback is ready.", true)}
+              >
+                Test
+              </Button>
             </div>
 
             {agentMessage && (
@@ -954,13 +1460,129 @@ export default function App() {
             <Button
               variant="outline"
               size="sm"
-              disabled={connectionState !== "connected"}
-              onClick={() =>
-                hookCoachCheck(currentSessionFilenameRef.current, getHookSnapshot())
-              }
+              disabled={connectionState !== "connected" || coachCheckState.status === "pending"}
+              onClick={requestCoachCheck}
             >
+              {coachCheckState.status === "pending" && (
+                <LoaderCircle className="animate-spin" />
+              )}
               Request Coach Check
             </Button>
+
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={
+                !speechSupported ||
+                riderVoiceFeedback.status === "listening" ||
+                riderVoiceFeedback.status === "sending"
+              }
+              onClick={requestManualRiderVoiceFeedback}
+            >
+              <Mic />
+              Record Rider Note
+            </Button>
+
+            <div
+              className={`rounded-md border p-3 text-xs ${
+                coachCheckState.status === "error"
+                  ? "border-red-500/30 bg-red-500/10 text-red-700"
+                  : coachCheckState.status === "sent"
+                    ? "border-green-500/30 bg-green-500/10 text-green-700"
+                    : coachCheckState.status === "skipped"
+                      ? "border-yellow-500/30 bg-yellow-500/10 text-yellow-700"
+                      : "bg-muted/20 text-muted-foreground"
+              }`}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <span className="font-semibold">
+                  Coach check: {coachCheckState.status}
+                </span>
+                {coachCheckState.target && (
+                  <span className="rounded-sm bg-background/60 px-2 py-0.5 text-[10px] font-bold uppercase">
+                    {coachCheckState.target}
+                  </span>
+                )}
+              </div>
+              <div className="mt-1">{coachCheckState.message}</div>
+              {coachCheckState.targetUrl && (
+                <div className="mt-1 break-all font-mono text-[10px] opacity-80">
+                  {coachCheckState.targetUrl}
+                </div>
+              )}
+              {coachCheckState.status === "sent" && (
+                <div className="mt-2 text-[11px] opacity-80">
+                  Forwarded means the hook endpoint accepted the request. The
+                  confirmed processing signal is a later agent message or command.
+                </div>
+              )}
+            </div>
+
+            <div
+              className={`rounded-md border p-3 text-xs ${
+                riderVoiceFeedback.status === "error" ||
+                riderVoiceFeedback.status === "unsupported"
+                  ? "border-red-500/30 bg-red-500/10 text-red-700"
+                  : riderVoiceFeedback.status === "sent"
+                    ? "border-green-500/30 bg-green-500/10 text-green-700"
+                    : riderVoiceFeedback.status === "listening" ||
+                        riderVoiceFeedback.status === "sending"
+                      ? "border-blue-500/30 bg-blue-500/10 text-blue-700"
+                      : "bg-muted/20 text-muted-foreground"
+              }`}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 font-semibold">
+                    {riderVoiceFeedback.status === "listening" ? (
+                      <Mic className="h-3.5 w-3.5" />
+                    ) : (
+                      <MicOff className="h-3.5 w-3.5" />
+                    )}
+                    Rider voice: {riderVoiceFeedback.status}
+                  </div>
+                  {riderVoiceFeedback.prompt && (
+                    <div className="mt-1">{riderVoiceFeedback.prompt}</div>
+                  )}
+                </div>
+                {riderVoiceFeedback.status === "listening" && (
+                  <span className="rounded-sm bg-background/60 px-2 py-0.5 text-[10px] font-bold">
+                    {riderVoiceFeedback.remainingSeconds}s
+                  </span>
+                )}
+                {riderVoiceFeedback.target && (
+                  <span className="rounded-sm bg-background/60 px-2 py-0.5 text-[10px] font-bold uppercase">
+                    {riderVoiceFeedback.target}
+                  </span>
+                )}
+              </div>
+              <div className="mt-1">{riderVoiceFeedback.message}</div>
+              {riderVoiceFeedback.transcript && (
+                <div className="mt-2 rounded-sm bg-background/60 p-2 text-[11px]">
+                  {riderVoiceFeedback.transcript}
+                </div>
+              )}
+              {riderVoiceFeedback.status === "listening" && (
+                <div className="mt-2 flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    onClick={stopRiderVoiceFeedback}
+                  >
+                    Send Now
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    onClick={cancelRiderVoiceFeedback}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              )}
+            </div>
 
             <div className="flex flex-col gap-2">
               {agentJournal.length === 0 ? (

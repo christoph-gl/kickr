@@ -39,6 +39,7 @@ Implement only these first:
 
 `/kickr_message ...`
 - Queue `{"type":"send_message","text":"..."}`.
+- If the rider has enabled voice feedback in the KICKR app, this message will be spoken by the browser. Add `"speak": false` for text-only notes.
 
 ## Later Command Behavior
 

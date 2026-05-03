@@ -104,11 +104,15 @@ Supported command payloads:
 {"type":"set_erg_watts","watts":220,"reason":"HR is steady"}
 {"type":"set_resistance","percent":35,"reason":"Free ride push"}
 {"type":"send_message","text":"Hold this effort for two more minutes"}
+{"type":"send_message","text":"Text only; do not speak this one","speak":false}
+{"type":"request_rider_voice_feedback","prompt":"How does this effort feel?","durationSeconds":10}
 {"type":"start_trainer"}
 {"type":"stop_trainer"}
 ```
 
 Use `set_erg_watts` and `set_resistance` as the canonical trainer-control commands. The app accepts `{"type":"set_trainer_mode","mode":"erg","targetWatts":220}` and `{"type":"set_trainer_mode","mode":"resistance","percent":35}` as compatibility fallbacks, but fresh agents should not invent new command shapes.
+
+`request_rider_voice_feedback` is a short, visible rider mic window. The browser listens for 10 seconds with Web Speech recognition and sends the transcript back as a `rider_feedback` hook. Do not expect always-on listening. Agent-side STT is a future extension path that should attach recorded audio to the same feedback event only after the target agent exposes a clear audio/STT endpoint.
 
 ### Agent Event / Context Endpoints
 - `POST /api/agent/events` stores structured agent/ride events in SQLite.
@@ -126,6 +130,8 @@ Use `set_erg_watts` and `set_resistance` as the canonical trainer-control comman
   - **OpenClaw**: `OPENCLAW_HOOKS_URL`, `OPENCLAW_HOOKS_TOKEN`. The route forwards the KICKR payload to the mapped `/hooks/kickr` endpoint with `Authorization: Bearer ${OPENCLAW_HOOKS_TOKEN}`.
 - If both are set, Hermes takes precedence. If neither is set, the route returns `{skipped: true}` and never throws.
 - First supported wake events: `ride_started`, `ride_ended`, `rider_feedback`, manual `coach_check`.
+- `/api/agent/hooks/trigger` can confirm that Next.js forwarded the wakeup to Hermes/OpenClaw and report the selected target, local target URL, HTTP status, and any response body/run id. It cannot universally prove the agent finished processing. Treat a later queued `send_message`, trainer command, or event as the processing confirmation.
+- Hook payloads include a compact `runtimeContract` with base URL, command endpoint, allowed command shapes, and fast-mode rules. Manual coach checks use `mode:"fast"` and include rolling telemetry plus rider profile essentials, so agents should not fetch repo/docs/history before giving a short cue.
 - Keep hook tokens out of client components and client-imported modules.
 - Restart `next dev` after editing `.env.local`; Next.js does not pick up env changes via hot reload.
 - Do not add high-HR, cadence-collapse, or power-target-missed triggers until the basic hook round trip works.

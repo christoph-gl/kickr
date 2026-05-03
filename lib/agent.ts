@@ -33,6 +33,15 @@ export type AgentCommand =
       id?: string;
       type: "send_message";
       text: string;
+      speak?: boolean;
+      reason?: string;
+    }
+  | {
+      id?: string;
+      type: "request_rider_voice_feedback";
+      prompt?: string;
+      durationSeconds?: number;
+      transcriptionMode?: "browser";
       reason?: string;
     }
   | {

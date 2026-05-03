@@ -128,11 +128,15 @@ Supported command types:
 {"type":"set_erg_watts","watts":220,"reason":"HR is steady"}
 {"type":"set_resistance","percent":35,"reason":"Free ride push"}
 {"type":"send_message","text":"Hold this effort for two more minutes"}
+{"type":"send_message","text":"Text only; do not speak this one","speak":false}
+{"type":"request_rider_voice_feedback","prompt":"How does this effort feel?","durationSeconds":10}
 {"type":"start_trainer"}
 {"type":"stop_trainer"}
 ```
 
 Use `set_erg_watts` as the canonical ERG command. The browser also accepts `{"type":"set_trainer_mode","mode":"erg","targetWatts":220}` as a compatibility fallback for agents that already emit that shape, but fresh integrations should prefer `set_erg_watts`.
+
+`request_rider_voice_feedback` opens a visible 10-second browser speech-recognition window in Chrome/Edge, then forwards the transcript as a `rider_feedback` hook. The current implementation uses browser Web Speech recognition first; agent-side STT can be added later by attaching recorded audio to the same feedback flow once the target agent exposes a concrete audio/STT endpoint.
 
 Read recent agent/ride events:
 
@@ -185,6 +189,10 @@ The browser owns Bluetooth. External agents (Hermes, OpenClaw, ...) operate thro
   - `HERMES_API_URL` (+ `HERMES_API_KEY`, `HERMES_KICKR_SESSION_ID`) -> `POST ${HERMES_API_URL}/v1/runs` with `{session_id, input, metadata}` (preferred when Hermes API Server is enabled).
   - `OPENCLAW_HOOKS_URL` (+ `OPENCLAW_HOOKS_TOKEN`) -> mapped OpenClaw `/hooks/kickr`.
   - Hermes wins if both are set. Neither set -> the route returns `{skipped: true}` and never throws.
+
+The hook payload includes a compact `runtimeContract` and ride snapshot so a live agent does not need to reread repo docs before acting. Manual coach checks use `mode:"fast"`: the agent should prefer one short `send_message` and avoid fetching history unless the included context is clearly insufficient.
+
+The hook trigger response confirms forwarding only: target backend, local target URL, HTTP status, and any response body/run id returned by Hermes/OpenClaw. Actual agent processing is confirmed later when the agent queues a `send_message`, trainer command, or event through the KICKR APIs.
 
 Initial wake events are intentionally minimal: `ride_started`, `ride_ended`, `rider_feedback`, and manual `coach_check` from the Agent Controller panel. Physiological triggers (high HR, cadence collapse) are later work.
 

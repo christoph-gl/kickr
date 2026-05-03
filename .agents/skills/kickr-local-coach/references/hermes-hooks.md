@@ -40,6 +40,7 @@ Canonical command payloads:
 
 ```json
 {"type":"send_message","text":"KICKR Hermes bridge connected","reason":"integration smoke test"}
+{"type":"send_message","text":"Text only; do not speak this one","speak":false}
 {"type":"set_erg_watts","watts":220,"reason":"Hermes command"}
 {"type":"set_resistance","percent":35,"reason":"Hermes command"}
 ```

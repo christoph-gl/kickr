@@ -106,12 +106,16 @@ Supported commands:
 {"type":"set_erg_watts","watts":220,"reason":"HR is steady"}
 {"type":"set_resistance","percent":35,"reason":"Free ride push"}
 {"type":"send_message","text":"Hold cadence steady"}
+{"type":"send_message","text":"Text only; do not speak this one","speak":false}
+{"type":"request_rider_voice_feedback","prompt":"How does this effort feel?","durationSeconds":10}
 {"type":"start_trainer"}
 {"type":"stop_trainer"}
 {"type":"set_workout_plan","horizonSeconds":600,"leadSeconds":20,"blocks":[{"durationSeconds":300,"targetPower":180},{"durationSeconds":300,"targetPower":190}],"reason":"Adaptive freeride refresh"}
 ```
 
 Use `send_message`, `set_erg_watts`, and `set_resistance` for the first integration. Treat `start_trainer` and `stop_trainer` as lower-level trainer commands, not workout-player controls. Use `set_workout_plan` only for adaptive freeride or explicitly planned agent workouts; the browser workout player applies it when connected.
+
+Use `request_rider_voice_feedback` sparingly when a short spoken rider answer is useful. The app opens a visible 10-second browser Web Speech recognition window and forwards the transcript as a `rider_feedback` hook.
 
 Use the exact command names above. The app accepts these compatibility fallbacks, but fresh agents should queue the canonical commands so behavior stays predictable:
 

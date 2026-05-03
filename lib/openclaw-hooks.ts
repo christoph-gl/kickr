@@ -1,18 +1,34 @@
-export type KickrHookEvent =
-  | { event: "ride_started"; sessionId: string | null; snapshot?: unknown }
-  | { event: "ride_ended"; sessionId: string | null; snapshot?: unknown }
-  | { event: "rider_feedback"; sessionId: string | null; text: string; snapshot?: unknown }
-  | { event: "coach_check"; sessionId: string | null; snapshot?: unknown }
-  | { event: "plan_refresh"; sessionId: string | null; snapshot?: unknown };
+export type KickrHookMode = "fast" | "deep";
 
-export type OpenClawHookResult =
-  | { sent: true }
+export type KickrHookEvent =
+  | { event: "ride_started"; sessionId: string | null; snapshot?: unknown; mode?: KickrHookMode }
+  | { event: "ride_ended"; sessionId: string | null; snapshot?: unknown; mode?: KickrHookMode }
+  | { event: "rider_feedback"; sessionId: string | null; text: string; snapshot?: unknown; mode?: KickrHookMode }
+  | { event: "coach_check"; sessionId: string | null; snapshot?: unknown; mode?: KickrHookMode }
+  | { event: "plan_refresh"; sessionId: string | null; snapshot?: unknown; mode?: KickrHookMode };
+
+export type AgentHookTarget = "hermes" | "openclaw";
+
+export type AgentHookResult =
+  | {
+      sent: true;
+      target: AgentHookTarget;
+      targetUrl?: string;
+      status?: number;
+      response?: unknown;
+    }
   | { skipped: true }
-  | { error: string };
+  | {
+      error: string;
+      target?: AgentHookTarget;
+      targetUrl?: string;
+      status?: number;
+      response?: unknown;
+    };
 
 export async function sendOpenClawHook(
   payload: KickrHookEvent
-): Promise<OpenClawHookResult> {
+): Promise<AgentHookResult> {
   try {
     const res = await fetch("/api/agent/hooks/trigger", {
       method: "POST",
@@ -22,7 +38,13 @@ export async function sendOpenClawHook(
 
     const result = await res.json().catch(() => null);
     if (!res.ok) {
-      return { error: result?.error || "Failed to trigger OpenClaw hook" };
+      return {
+        error: result?.error || "Failed to trigger agent hook",
+        target: result?.target,
+        targetUrl: result?.targetUrl,
+        status: result?.status,
+        response: result?.response,
+      };
     }
 
     return result;
@@ -48,8 +70,12 @@ export function hookRiderFeedback(
   return sendOpenClawHook({ event: "rider_feedback", sessionId, text, snapshot });
 }
 
-export function hookCoachCheck(sessionId: string | null, snapshot?: unknown) {
-  return sendOpenClawHook({ event: "coach_check", sessionId, snapshot });
+export function hookCoachCheck(
+  sessionId: string | null,
+  snapshot?: unknown,
+  mode: KickrHookMode = "fast"
+) {
+  return sendOpenClawHook({ event: "coach_check", sessionId, snapshot, mode });
 }
 
 export function hookPlanRefresh(sessionId: string | null, snapshot?: unknown) {
