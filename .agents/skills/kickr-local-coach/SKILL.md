@@ -233,13 +233,15 @@ If the repo contains partial OpenClaw/Hermes changes from an earlier attempt:
 
 ## Coaching Loop
 
-For live coaching:
+For external-agent coaching:
 
 1. Read rider profile with `GET /api/rider`.
 2. Read recent ride context with `GET /api/agent/events?limit=200`.
 3. Decide whether to send text feedback or a trainer command.
 4. Queue the result with `POST /api/agent/commands`.
 5. Avoid rapid-fire changes; if you are running a loop, prefer event-triggered or low-frequency checks.
+
+For active in-ride UI coaching, the KICKR app now owns the fast path through `POST /api/coach/live`. Hermes/OpenClaw are better for pre-ride planning, route/workout generation, post-ride summaries, and rider profile or memory updates.
 
 ## Hook Direction
 
@@ -254,7 +256,7 @@ Next.js app -> OpenClaw / Hermes
   Hermes: use a Hermes-supported inbound mechanism or local relay; Hermes lifecycle hooks are not the same as inbound app webhooks
 ```
 
-Hooks are for waking the agent on meaningful events such as ride started, ride ended, rider feedback, sustained high HR, cadence collapse, or manual “coach me now.”
+Hooks are for waking the agent on meaningful non-urgent events such as ride started, ride ended, post-ride analysis, and deeper planning. Do not route latency-sensitive in-ride checks through Hermes/OpenClaw when `/api/coach/live` can handle them directly.
 
 Hooks are Phase 2. Do not add them during Phase 1.
 

@@ -39,16 +39,18 @@ If the user only gave the GitHub URL and then says “implement it”, “first�
    npm install
    ```
 
-5. Create `.env.local` only if the user wants screenshot/image-to-workout extraction during setup. Ask the user for an image-capable AI API key — do not fabricate one. Hook adapter env vars are added in Step 2 below; leave them out for now.
+5. Create `.env.local` only if the user wants live in-ride coach checks, Adaptive Freeride plan refresh, or screenshot/image-to-workout extraction during setup. Ask the user for a real AI API key — do not fabricate one. Hook adapter env vars are added in Step 2 below; leave them out for now.
 
    ```bash
    cat > .env.local <<'EOF'
+   LIVE_COACH_API_KEY=<paste from user>
+   LIVE_COACH_MODEL=google/gemini-3-flash
    WORKOUT_IMAGE_EXTRACTOR_API_KEY=<paste from user>
    WORKOUT_IMAGE_EXTRACTOR_MODEL=google/gemini-3-flash
    EOF
    ```
 
-   If the user only wants trainer control and local coaching, it is fine to skip this file for now. The KICKR app can still start without image extraction credentials. Do **not** run `cp .env.example .env.local`; the example file intentionally contains optional placeholders.
+   If the user only wants trainer control and local agent commands, it is fine to skip this file for now. The KICKR app can still start without AI credentials, but live coach checks will return a configuration error. Do **not** run `cp .env.example .env.local`; the example file intentionally contains optional placeholders.
 
    Web Bluetooth requires a secure context (HTTPS or `localhost`). If the user has Portless, prefer it for stable HTTPS at `https://kickr.localhost`; otherwise plain `http://localhost:3000` works for dev.
 

@@ -59,7 +59,12 @@ Communication relies heavily on the **Web Bluetooth API** (`navigator.bluetooth`
 5. **Workout Imports (ZWO & AI):**
    - The app natively parses standard XML `.zwo` (Zwift) files directly in the browser via `DOMParser`.
    - The app can extract workouts from screenshots using the **Vercel AI SDK** and an image-capable multimodal model. The backend endpoint (`/api/extract-workout/route.ts`) expects `WORKOUT_IMAGE_EXTRACTOR_API_KEY` and `WORKOUT_IMAGE_EXTRACTOR_MODEL` in `.env.local` for screenshot imports. It still accepts `AI_GATEWAY_API_KEY` and `AI_GATEWAY_MODEL` as compatibility fallbacks.
-6. **SQLite Persistence:**
+6. **Live In-Ride LLM Lane:**
+   - During rides, avoid the Hermes/OpenClaw wakeup -> callback -> command polling path for time-sensitive coaching. Use `POST /api/coach/live`, which calls a fast AI SDK model directly and returns one structured `AgentCommand` for the browser to apply immediately.
+   - Configure `LIVE_COACH_API_KEY` and `LIVE_COACH_MODEL` for this lane. It falls back to `WORKOUT_IMAGE_EXTRACTOR_API_KEY` / `AI_GATEWAY_API_KEY` and `AI_GATEWAY_MODEL` for compatibility. `LIVE_COACH_TIMEOUT_MS` defaults to 3500 so a slow provider does not stall the ride UI indefinitely.
+   - Manual coach checks, rider voice feedback, and Adaptive Freeride plan refreshes should use this live lane. Rider voice feedback is sent as recorded audio to the multimodal model, not as a browser speech transcript. External agents are better suited for pre-ride planning, route/workout creation, post-ride summaries, and rider-profile/memory updates.
+   - When the live coach returns an ERG watt change during a playing workout, the UI track should reflect that change from the current elapsed second until the next existing workout step. Later planned steps should remain intact.
+7. **SQLite Persistence:**
    - Runtime data lives in `.data/kickr.sqlite`, ignored by git.
    - `lib/db.ts` owns schema creation and persistence functions. Keep DB initialization lazy and server-side.
    - Current tables: `ride_sessions`, `ride_samples`, `agent_events`, `agent_commands`, and `rider_profile`.
@@ -112,7 +117,7 @@ Supported command payloads:
 
 Use `set_erg_watts` and `set_resistance` as the canonical trainer-control commands. The app accepts `{"type":"set_trainer_mode","mode":"erg","targetWatts":220}` and `{"type":"set_trainer_mode","mode":"resistance","percent":35}` as compatibility fallbacks, but fresh agents should not invent new command shapes.
 
-`request_rider_voice_feedback` is a short, visible rider mic window. The browser listens for 10 seconds with Web Speech recognition and sends the transcript back as a `rider_feedback` hook. Do not expect always-on listening. Agent-side STT is a future extension path that should attach recorded audio to the same feedback event only after the target agent exposes a clear audio/STT endpoint.
+`request_rider_voice_feedback` is a short, visible rider mic window. For the in-app live coach lane, the browser records roughly 10 seconds of audio with `MediaRecorder` and sends it directly to the multimodal model instead of sending a speech transcript. Do not expect always-on listening.
 
 ### Agent Event / Context Endpoints
 - `POST /api/agent/events` stores structured agent/ride events in SQLite.
@@ -123,15 +128,21 @@ Use `set_erg_watts` and `set_resistance` as the canonical trainer-control comman
 - `GET /api/rider` returns the current rider profile.
 - `PUT /api/rider` updates the rider profile.
 
+### Live Coaching vs Outbound Agent Wakeups
+- Use `POST /api/coach/live` for in-ride, latency-sensitive decisions. It returns at most one structured command such as `send_message`, `set_erg_watts`, `set_resistance`, `request_rider_voice_feedback`, or `set_workout_plan`.
+- Keep Hermes/OpenClaw for deeper asynchronous work: initial route/workout planning, creating a workout from scratch, end-of-ride ingestion, and rider profile/memory adaptation.
+
 ### Outbound Agent Wakeups
 - Browser/client code calls `POST /api/agent/hooks/trigger`.
 - The route picks an adapter from server-only env vars. Set exactly one backend:
   - **Hermes** (preferred when Hermes API Server is enabled): `HERMES_API_URL`, `HERMES_API_KEY`, `HERMES_KICKR_SESSION_ID`. The route forwards to `${HERMES_API_URL}/v1/runs` with `Authorization: Bearer ${HERMES_API_KEY}` and a body of `{session_id, input, metadata}` where `metadata` carries the full KICKR payload.
   - **OpenClaw**: `OPENCLAW_HOOKS_URL`, `OPENCLAW_HOOKS_TOKEN`. The route forwards the KICKR payload to the mapped `/hooks/kickr` endpoint with `Authorization: Bearer ${OPENCLAW_HOOKS_TOKEN}`.
 - If both are set, Hermes takes precedence. If neither is set, the route returns `{skipped: true}` and never throws.
-- First supported wake events: `ride_started`, `ride_ended`, `rider_feedback`, manual `coach_check`.
+- First supported wake events: `ride_started`, `ride_ended`, `rider_feedback`, manual `coach_check`. Prefer the live coach endpoint for rider feedback and manual coach checks during an active ride; keep these hook events for compatibility and non-urgent external-agent flows.
 - `/api/agent/hooks/trigger` can confirm that Next.js forwarded the wakeup to Hermes/OpenClaw and report the selected target, local target URL, HTTP status, and any response body/run id. It cannot universally prove the agent finished processing. Treat a later queued `send_message`, trainer command, or event as the processing confirmation.
-- Hook payloads include a compact `runtimeContract` with base URL, command endpoint, allowed command shapes, and fast-mode rules. Manual coach checks use `mode:"fast"` and include rolling telemetry plus rider profile essentials, so agents should not fetch repo/docs/history before giving a short cue.
+- Hook payloads include a compact `runtimeContract` with base URL, command endpoint, allowed command shapes, and fast-mode rules. The callback instruction is also embedded in the top-level `message` for OpenClaw mappings that only pass `message`, `event`, `sessionId`, and `snapshot`. Manual coach checks use `mode:"fast"` and include rolling telemetry plus rider profile essentials, so agents should not fetch repo/docs/history before giving a short cue.
+- For OpenClaw, prefer a stable hook session (`openclaw config set hooks.defaultSessionKey kickr-local-coach`) and allowlist only the local KICKR callback command, for example `curl -sS -X POST http://localhost:*/api/agent/commands*`.
+- `AGENT_CALLBACK_BASE_URL` can override the callback base URL when Hermes/OpenClaw cannot reach the URL inferred from the incoming request.
 - Keep hook tokens out of client components and client-imported modules.
 - Restart `next dev` after editing `.env.local`; Next.js does not pick up env changes via hot reload.
 - Do not add high-HR, cadence-collapse, or power-target-missed triggers until the basic hook round trip works.
@@ -151,7 +162,7 @@ The settings cog in the app opens a modal for manual profile editing. Future LLM
 ### Important Future Agent Rules
 - Keep LLM decisions as structured commands. Do not put FTMS byte encoding in prompts or agent glue.
 - Store agent decisions and outcomes; this is the debugging trail for coaching behavior.
-- Avoid high-frequency LLM loops. Use snapshots/events and let the app handle real-time trainer execution.
+- Avoid high-frequency external-agent loops. Use `/api/coach/live` for sparse in-ride LLM decisions and let the app handle real-time trainer execution.
 - Use `/api/rider`, `/api/sessions`, and `/api/agent/events` as the initial OpenClaw/Hermes context surface.
 - Prefer adding new server routes or DB helpers over reading `.data/kickr.sqlite` directly from external scripts.
 
@@ -168,4 +179,4 @@ The settings cog in the app opens a modal for manual profile editing. Future LLM
 - **Workout Builder UI:** Create a drag-and-drop timeline UI where a user can manually construct custom workouts without needing to write JSON or import ZWO files.
 - **Live Telemetry Charting:** Use a charting library (like Recharts, which is compatible with shadcn/ui) to plot actual live Power/Cadence/HR data as the ride progresses, overlaying it on top of the planned workout chart.
 - **Save Workouts via Database:** Imported/saved workouts still use JSON files under `workouts/`; consider moving them behind SQLite later.
-- **OpenClaw/Hermes Integration:** Phase 1 (agent installs the skill, reads context, queues commands) and Phase 2 (KICKR app -> agent wakeups via the dual adapter route) are wired. Future work: bump `kickr-skill-version` whenever the contract changes, add player commands (select/start/pause workout), and only then add physiological triggers (high HR, cadence collapse, power-target-missed).
+- **OpenClaw/Hermes Integration:** Phase 1 (agent installs the skill, reads context, queues commands) and Phase 2 (KICKR app -> agent wakeups via the dual adapter route) are wired for asynchronous planning and post-ride work. Live in-ride coaching now belongs to `/api/coach/live`.

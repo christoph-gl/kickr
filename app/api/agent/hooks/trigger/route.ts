@@ -13,17 +13,53 @@ function isKnownHookEvent(payload: KickrHookEvent) {
   );
 }
 
+function getCallbackBaseUrl(origin: string) {
+  const configuredBaseUrl = process.env.AGENT_CALLBACK_BASE_URL;
+  const baseUrl = (configuredBaseUrl || origin).replace(/\/+$/, "");
+
+  if (configuredBaseUrl) {
+    return baseUrl;
+  }
+
+  try {
+    const url = new URL(baseUrl);
+    if (
+      url.protocol === "https:" &&
+      url.port &&
+      (url.hostname === "localhost" || url.hostname === "127.0.0.1")
+    ) {
+      url.protocol = "http:";
+      return url.toString().replace(/\/+$/, "");
+    }
+  } catch {
+    return baseUrl;
+  }
+
+  return baseUrl;
+}
+
 function getRuntimeContract(origin: string, payload: KickrHookEvent) {
+  const baseUrl = getCallbackBaseUrl(origin);
+  const originBaseUrl = origin.replace(/\/+$/, "");
+  const commandEndpoint = `${baseUrl}/api/agent/commands`;
+  const commandEndpointFallbacks =
+    baseUrl === originBaseUrl ? [] : [`${originBaseUrl}/api/agent/commands`];
+
   return {
-    baseUrl: origin,
+    baseUrl,
+    requestOrigin: originBaseUrl,
     contextAlreadyIncluded: true,
     useAtMostOneCommand: true,
-    commandEndpoint: `${origin}/api/agent/commands`,
+    commandEndpoint,
+    commandEndpointFallbacks,
     contextEndpoints: {
-      rider: `${origin}/api/rider`,
-      recentEvents: `${origin}/api/agent/events?limit=20`,
-      sessions: `${origin}/api/sessions`,
+      rider: `${baseUrl}/api/rider`,
+      recentEvents: `${baseUrl}/api/agent/events?limit=20`,
+      sessions: `${baseUrl}/api/sessions`,
     },
+    commandAuth: process.env.AGENT_COMMAND_TOKEN
+      ? "Authorization: Bearer <AGENT_COMMAND_TOKEN>"
+      : "No Authorization header required.",
     commands: [
       { type: "send_message", text: "short rider-facing cue" },
       { type: "set_erg_watts", watts: 220, reason: "why" },
@@ -50,15 +86,33 @@ function getRuntimeContract(origin: string, payload: KickrHookEvent) {
   };
 }
 
-function getHookMessage(payload: KickrHookEvent) {
+type RuntimeContract = ReturnType<typeof getRuntimeContract>;
+
+function formatCommandContract(contract: RuntimeContract) {
+  const fallbackLine = contract.commandEndpointFallbacks.length
+    ? ` If that URL fails, try ${contract.commandEndpointFallbacks.join(", ")}.`
+    : "";
+
+  return [
+    "Do not answer only in plain text; the KICKR UI will not receive that.",
+    `Queue exactly one result with HTTP POST ${contract.commandEndpoint}.${fallbackLine}`,
+    contract.commandAuth,
+    'Preferred body: {"type":"send_message","text":"short rider-facing cue"}.',
+    'Only change trainer load when clearly needed: {"type":"set_erg_watts","watts":220,"reason":"why"} or {"type":"set_resistance","percent":35,"reason":"why"}.',
+  ].join(" ");
+}
+
+function getHookMessage(payload: KickrHookEvent, contract: RuntimeContract) {
   const eventLabel = payload.event.replaceAll("_", " ");
+  const commandContract = formatCommandContract(contract);
+
   if (payload.event === "coach_check" && payload.mode === "fast") {
-    return "KICKR fast coach check: use the included snapshot and return one short rider-facing cue or one clear command.";
+    return `KICKR fast coach check: use the included snapshot and queue one short rider-facing cue or one clear command. ${commandContract}`;
   }
   if (payload.event === "rider_feedback") {
-    return "KICKR rider feedback: use the rider transcript and included snapshot, then decide whether to send one short cue or command.";
+    return `KICKR rider feedback: use the rider transcript and included snapshot, then queue one short cue or command. ${commandContract}`;
   }
-  return `KICKR ${eventLabel}: use the included KICKR context first, then decide whether to send coaching text or queue a trainer command.`;
+  return `KICKR ${eventLabel}: use the included KICKR context first, then decide whether to queue coaching text or a trainer command. ${commandContract}`;
 }
 
 function getHookInstruction(payload: KickrHookEvent) {
@@ -72,13 +126,15 @@ function getHookInstruction(payload: KickrHookEvent) {
 }
 
 function buildKickrPayload(payload: KickrHookEvent, origin: string) {
+  const runtimeContract = getRuntimeContract(origin, payload);
+
   return {
     source: "kickr",
     timestamp: Date.now(),
     ...payload,
-    message: getHookMessage(payload),
+    message: getHookMessage(payload, runtimeContract),
     instruction: getHookInstruction(payload),
-    runtimeContract: getRuntimeContract(origin, payload),
+    runtimeContract,
   };
 }
 
@@ -130,6 +186,12 @@ async function forwardToOpenClaw(payload: KickrHookEvent, origin: string) {
 export async function POST(req: Request) {
   const hermesUrl = process.env.HERMES_API_URL;
   const openclawUrl = process.env.OPENCLAW_HOOKS_URL;
+  const configuredTarget = hermesUrl ? "hermes" : openclawUrl ? "openclaw" : undefined;
+  const configuredTargetUrl = hermesUrl
+    ? getHermesTargetUrl()
+    : openclawUrl
+      ? getOpenClawTargetUrl()
+      : undefined;
 
   if (!hermesUrl && !openclawUrl) {
     return NextResponse.json({ skipped: true });
@@ -144,8 +206,8 @@ export async function POST(req: Request) {
     const origin =
       req.headers.get("origin") ||
       `${new URL(req.url).protocol}//${new URL(req.url).host}`;
-    const target = hermesUrl ? "hermes" : "openclaw";
-    const targetUrl = hermesUrl ? getHermesTargetUrl() : getOpenClawTargetUrl();
+    const target = configuredTarget!;
+    const targetUrl = configuredTargetUrl!;
     const res = hermesUrl
       ? await forwardToHermes(payload, origin)
       : await forwardToOpenClaw(payload, origin);
@@ -182,9 +244,15 @@ export async function POST(req: Request) {
     });
   } catch (error) {
     console.error("[agent-hooks] Failed to forward hook:", error);
+    const message = error instanceof Error ? error.message : String(error);
     return NextResponse.json(
-      { error: "Failed to forward agent hook" },
-      { status: 500 }
+      {
+        error: "Failed to forward agent hook",
+        message,
+        target: configuredTarget,
+        targetUrl: configuredTargetUrl,
+      },
+      { status: 502 }
     );
   }
 }

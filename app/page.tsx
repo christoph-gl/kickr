@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Cog, LoaderCircle, Mic, MicOff, Volume2, VolumeX } from "lucide-react";
 import { getRiderProfile, RIDER_PROFILE, saveRiderProfile, type RiderProfile } from "@/lib/profile";
 import type { AgentCommand, AgentEvent } from "@/lib/agent";
-import { hookCoachCheck, hookRideEnded, hookRideStarted, hookRiderFeedback } from "@/lib/openclaw-hooks";
+import { hookRideEnded, hookRideStarted } from "@/lib/openclaw-hooks";
 import { WorkoutPlayer, type WorkoutPlayerHandle } from "@/components/workout-player";
 import { 
   RideSession, 
@@ -36,6 +36,17 @@ type AgentJournalEntry = {
   status: "received" | "applied" | "failed";
   message?: string;
 };
+type LiveCoachTurn = {
+  role: "user" | "assistant";
+  text: string;
+  timestamp: number;
+  command?: string;
+  execution?: "applied" | "failed" | "none";
+};
+type LiveCoachChatMessage = LiveCoachTurn & {
+  id: string;
+  kind: "text" | "audio" | "action" | "status";
+};
 type CoachCheckState = {
   status: "idle" | "pending" | "sent" | "skipped" | "error";
   message: string;
@@ -45,46 +56,11 @@ type CoachCheckState = {
 type RiderVoiceFeedbackState = {
   status: "idle" | "listening" | "sending" | "sent" | "error" | "unsupported";
   prompt: string;
-  transcript: string;
+  audioNote: string;
   remainingSeconds: number;
   message: string;
   target?: string;
 };
-type BrowserSpeechRecognitionAlternative = {
-  transcript: string;
-};
-type BrowserSpeechRecognitionResult = {
-  isFinal: boolean;
-  length: number;
-  [index: number]: BrowserSpeechRecognitionAlternative;
-};
-type BrowserSpeechRecognitionEvent = {
-  resultIndex: number;
-  results: {
-    length: number;
-    [index: number]: BrowserSpeechRecognitionResult;
-  };
-};
-type BrowserSpeechRecognitionErrorEvent = {
-  error: string;
-  message?: string;
-};
-type BrowserSpeechRecognition = {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  start: () => void;
-  stop: () => void;
-  abort: () => void;
-  onresult: ((event: BrowserSpeechRecognitionEvent) => void) | null;
-  onerror: ((event: BrowserSpeechRecognitionErrorEvent) => void) | null;
-  onend: (() => void) | null;
-};
-type SpeechRecognitionWindow = Window &
-  typeof globalThis & {
-    SpeechRecognition?: new () => BrowserSpeechRecognition;
-    webkitSpeechRecognition?: new () => BrowserSpeechRecognition;
-  };
 
 export default function App() {
   const clientRef = useRef(new KickrCore2Client());
@@ -116,11 +92,14 @@ export default function App() {
   });
   const [voiceFeedbackEnabled, setVoiceFeedbackEnabled] = useState(false);
   const [speechSupported, setSpeechSupported] = useState(false);
+  const [audioRecordingSupported, setAudioRecordingSupported] = useState(false);
+  const [liveCoachInput, setLiveCoachInput] = useState("");
+  const [liveCoachMessages, setLiveCoachMessages] = useState<LiveCoachChatMessage[]>([]);
   const [riderVoiceFeedback, setRiderVoiceFeedback] =
     useState<RiderVoiceFeedbackState>({
       status: "idle",
       prompt: "",
-      transcript: "",
+      audioNote: "",
       remainingSeconds: 0,
       message: "No rider voice request yet.",
     });
@@ -133,13 +112,16 @@ export default function App() {
   const pollingAgentCommandsRef = useRef(false);
   const activeHookSessionRef = useRef<string | null>(null);
   const lastSpokenAgentMessageRef = useRef<{ text: string; timestamp: number } | null>(null);
-  const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
   const speechTimeoutRef = useRef<number | null>(null);
   const speechCountdownRef = useRef<number | null>(null);
+  const liveCoachTurnsRef = useRef<LiveCoachTurn[]>([]);
   const riderVoiceFeedbackRef = useRef({
     active: false,
     prompt: "",
-    transcript: "",
+    audioBlob: null as Blob | null,
     finalized: false,
   });
 
@@ -153,6 +135,10 @@ export default function App() {
     const hydrateVoiceFeedback = window.setTimeout(() => {
       setSpeechSupported(
         "speechSynthesis" in window && "SpeechSynthesisUtterance" in window
+      );
+      setAudioRecordingSupported(
+        Boolean(navigator.mediaDevices?.getUserMedia) &&
+          typeof MediaRecorder !== "undefined"
       );
       setVoiceFeedbackEnabled(
         window.localStorage.getItem("kickr.voiceFeedbackEnabled") === "true"
@@ -344,11 +330,6 @@ export default function App() {
     speakAgentMessage("Voice feedback enabled.", true);
   };
 
-  const getSpeechRecognitionConstructor = () => {
-    const speechWindow = window as SpeechRecognitionWindow;
-    return speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition;
-  };
-
   const clearSpeechTimers = () => {
     if (speechTimeoutRef.current) {
       window.clearTimeout(speechTimeoutRef.current);
@@ -360,16 +341,30 @@ export default function App() {
     }
   };
 
+  const stopVoiceMediaStream = () => {
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    mediaStreamRef.current = null;
+  };
+
   const stopRiderVoiceFeedback = () => {
     clearSpeechTimers();
-    speechRecognitionRef.current?.stop();
+    if (mediaRecorderRef.current?.state === "recording") {
+      mediaRecorderRef.current.stop();
+      return;
+    }
+    finalizeRiderVoiceFeedback();
   };
 
   const cancelRiderVoiceFeedback = () => {
     riderVoiceFeedbackRef.current.active = false;
     riderVoiceFeedbackRef.current.finalized = true;
     clearSpeechTimers();
-    speechRecognitionRef.current?.abort();
+    if (mediaRecorderRef.current?.state === "recording") {
+      mediaRecorderRef.current.stop();
+    }
+    mediaRecorderRef.current = null;
+    audioChunksRef.current = [];
+    stopVoiceMediaStream();
     setRiderVoiceFeedback((state) => ({
       ...state,
       status: "idle",
@@ -386,13 +381,24 @@ export default function App() {
     feedback.finalized = true;
     clearSpeechTimers();
 
-    const text = feedback.transcript.trim().replace(/\s+/g, " ");
-    if (!text) {
+    const audioBlob =
+      feedback.audioBlob ||
+      (audioChunksRef.current.length
+        ? new Blob(audioChunksRef.current, {
+            type: audioChunksRef.current[0]?.type || "audio/webm",
+          })
+        : null);
+
+    mediaRecorderRef.current = null;
+    audioChunksRef.current = [];
+    stopVoiceMediaStream();
+
+    if (!audioBlob || audioBlob.size === 0) {
       setRiderVoiceFeedback((state) => ({
         ...state,
         status: "error",
         remainingSeconds: 0,
-        message: "No speech was recognized. Try a short phrase like hard, okay, or stop.",
+        message: "No audio was recorded. Try a short phrase like harder, easier, or did you change it?",
       }));
       return;
     }
@@ -400,80 +406,49 @@ export default function App() {
     setRiderVoiceFeedback((state) => ({
       ...state,
       status: "sending",
-      transcript: text,
+      audioNote: `Audio note recorded (${Math.max(1, Math.round(audioBlob.size / 1024))} KB).`,
       remainingSeconds: 0,
-      message: "Sending rider feedback to coach...",
+      message: "Asking live coach...",
     }));
 
-    await logAgentEvent({
-      type: "rider_feedback",
-      sessionId: currentSessionFilenameRef.current,
-      timestamp: Date.now(),
-      text,
-    });
-
-    const result = await hookRiderFeedback(
-      currentSessionFilenameRef.current,
-      text,
-      {
-        ...getHookSnapshot(),
-        riderVoiceFeedback: {
-          prompt: feedback.prompt,
-          transcriptionMode: "browser",
-        },
-      }
-    );
-
-    if ("sent" in result) {
+    try {
+      const result = await sendLiveCoachTurn({
+        audioBlob,
+        userText: "Audio message",
+        userKind: "audio",
+      });
       setRiderVoiceFeedback((state) => ({
         ...state,
-        status: "sent",
-        target: result.target,
-        message: `Sent to ${result.target}.`,
+        status: result.executionResult?.ok === false ? "error" : "sent",
+        target: "live llm",
+        message: result.response.command
+          ? result.executionResult?.ok === false
+            ? `Live coach chose ${describeCommand(result.response.command)}, but it failed: ${result.executionResult.message}`
+            : `${result.response.degraded ? "Degraded live coach" : "Live coach"} applied ${describeCommand(result.response.command)}.`
+          : `Audio sent; ${result.response.model || "live coach"} made no change.`,
       }));
       return;
-    }
-
-    if ("skipped" in result) {
+    } catch (error) {
       setRiderVoiceFeedback((state) => ({
         ...state,
         status: "error",
-        message: "Transcript captured, but no coach hook backend is configured.",
+        target: "live llm",
+        message: error instanceof Error ? error.message : String(error),
       }));
-      return;
     }
-
-    setRiderVoiceFeedback((state) => ({
-      ...state,
-      status: "error",
-      target: result.target,
-      message: result.error,
-    }));
   };
 
-  const startRiderVoiceFeedbackWindow = (command: AgentCommand) => {
+  const startRiderVoiceFeedbackWindow = async (command: AgentCommand) => {
     if (command.type !== "request_rider_voice_feedback") return;
 
-    const Recognition = getSpeechRecognitionConstructor();
-    if (!Recognition) {
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
       setRiderVoiceFeedback({
         status: "unsupported",
         prompt: command.prompt || "How does this effort feel?",
-        transcript: "",
+        audioNote: "",
         remainingSeconds: 0,
         message:
-          "Browser speech recognition is unavailable. Use Chrome or Edge for voice feedback.",
-      });
-      return;
-    }
-
-    if (command.transcriptionMode && command.transcriptionMode !== "browser") {
-      setRiderVoiceFeedback({
-        status: "unsupported",
-        prompt: command.prompt || "How does this effort feel?",
-        transcript: "",
-        remainingSeconds: 0,
-        message: "Only browser speech recognition is currently wired in this app.",
+          "Audio recording is unavailable. Use Chrome or Edge and allow microphone access.",
       });
       return;
     }
@@ -483,64 +458,71 @@ export default function App() {
       10,
       Math.max(3, Math.round(command.durationSeconds ?? 10))
     );
-    const recognition = new Recognition();
-    let finalTranscript = "";
-    let interimTranscript = "";
 
     clearSpeechTimers();
-    speechRecognitionRef.current?.abort();
-    speechRecognitionRef.current = recognition;
+    if (mediaRecorderRef.current?.state === "recording") {
+      mediaRecorderRef.current.stop();
+    }
+    stopVoiceMediaStream();
+    audioChunksRef.current = [];
+
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (error) {
+      setRiderVoiceFeedback({
+        status: "error",
+        prompt,
+        audioNote: "",
+        remainingSeconds: 0,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+
+    const preferredType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+      ? "audio/webm;codecs=opus"
+      : MediaRecorder.isTypeSupported("audio/webm")
+        ? "audio/webm"
+        : "";
+    const recorder = preferredType
+      ? new MediaRecorder(stream, { mimeType: preferredType })
+      : new MediaRecorder(stream);
+
+    mediaStreamRef.current = stream;
+    mediaRecorderRef.current = recorder;
     riderVoiceFeedbackRef.current = {
       active: true,
       prompt,
-      transcript: "",
+      audioBlob: null,
       finalized: false,
     };
 
     setRiderVoiceFeedback({
       status: "listening",
       prompt,
-      transcript: "",
+      audioNote: "Recording audio for Flash.",
       remainingSeconds: durationSeconds,
-      message: "Listening...",
+      message: "Recording...",
     });
 
     speakAgentMessage(prompt);
 
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = navigator.language || "en-US";
-
-    recognition.onresult = (event) => {
-      interimTranscript = "";
-      for (let i = event.resultIndex; i < event.results.length; i += 1) {
-        const result = event.results[i];
-        const transcript = result[0]?.transcript || "";
-        if (result.isFinal) {
-          finalTranscript += `${transcript} `;
-        } else {
-          interimTranscript += transcript;
-        }
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        audioChunksRef.current.push(event.data);
       }
-
-      const transcript = `${finalTranscript}${interimTranscript}`.trim();
-      riderVoiceFeedbackRef.current.transcript = transcript;
-      setRiderVoiceFeedback((state) => ({ ...state, transcript }));
     };
 
-    recognition.onerror = (event) => {
-      riderVoiceFeedbackRef.current.active = false;
-      riderVoiceFeedbackRef.current.finalized = true;
-      clearSpeechTimers();
-      setRiderVoiceFeedback((state) => ({
-        ...state,
-        status: "error",
-        remainingSeconds: 0,
-        message: event.message || `Speech recognition failed: ${event.error}`,
-      }));
+    recorder.onerror = () => {
+      cancelRiderVoiceFeedback();
     };
 
-    recognition.onend = () => {
+    recorder.onstop = () => {
+      if (riderVoiceFeedbackRef.current.finalized) return;
+      riderVoiceFeedbackRef.current.audioBlob = new Blob(audioChunksRef.current, {
+        type: recorder.mimeType || "audio/webm",
+      });
       finalizeRiderVoiceFeedback();
     };
 
@@ -556,11 +538,12 @@ export default function App() {
     }, durationSeconds * 1000);
 
     try {
-      recognition.start();
+      recorder.start();
     } catch (error) {
       riderVoiceFeedbackRef.current.active = false;
       riderVoiceFeedbackRef.current.finalized = true;
       clearSpeechTimers();
+      stopVoiceMediaStream();
       setRiderVoiceFeedback((state) => ({
         ...state,
         status: "error",
@@ -570,52 +553,163 @@ export default function App() {
     }
   };
 
-  const extractHookRunId = (response: unknown) => {
-    if (!response || typeof response !== "object") return undefined;
-    const record = response as Record<string, unknown>;
-    const id = record.id || record.run_id || record.runId;
-    return typeof id === "string" ? id : undefined;
+  const makeLiveCoachMessageId = () =>
+    `live-coach-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  const rememberLiveCoachTurn = (
+    turn: LiveCoachTurn,
+    kind: LiveCoachChatMessage["kind"] = turn.role === "assistant" ? "action" : "text"
+  ) => {
+    liveCoachTurnsRef.current = [...liveCoachTurnsRef.current, turn].slice(-12);
+    setLiveCoachMessages((messages) =>
+      [
+        ...messages,
+        {
+          id: makeLiveCoachMessageId(),
+          kind,
+          ...turn,
+        },
+      ].slice(-24)
+    );
+  };
+
+  const requestLiveCoachCommand = async (input?: { audioBlob?: Blob; riderText?: string }) => {
+    const payload = {
+      snapshot: getHookSnapshot(),
+      riderText: input?.riderText,
+      conversationHistory: liveCoachTurnsRef.current,
+    };
+    const body = new FormData();
+    if (input?.audioBlob) {
+      body.append("payload", JSON.stringify(payload));
+      body.append("audio", input.audioBlob, "rider-feedback.webm");
+    }
+
+    const res = await fetch("/api/coach/live", {
+      method: "POST",
+      ...(input?.audioBlob
+        ? { body }
+        : {
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          }),
+    });
+
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      throw new Error(data?.error || "Live coach request failed");
+    }
+
+    return data as {
+      model?: string;
+      degraded?: boolean;
+      error?: string;
+      command?: AgentCommand | null;
+      action?: { action?: string; reason?: string };
+    };
+  };
+
+  const sendLiveCoachTurn = async (input?: {
+    audioBlob?: Blob;
+    userText?: string;
+    userKind?: LiveCoachChatMessage["kind"];
+  }) => {
+    if (input?.userText) {
+      await logAgentEvent({
+        type: "rider_feedback",
+        sessionId: currentSessionFilenameRef.current,
+        timestamp: Date.now(),
+        text: input.audioBlob ? "[audio rider feedback]" : input.userText,
+      });
+      rememberLiveCoachTurn(
+        {
+          role: "user",
+          text: input.userText,
+          timestamp: Date.now(),
+          execution: "none",
+        },
+        input.userKind || "text"
+      );
+    }
+
+    const response = await requestLiveCoachCommand({
+      audioBlob: input?.audioBlob,
+      riderText: input?.audioBlob ? undefined : input?.userText,
+    });
+    let executionResult: Awaited<ReturnType<typeof executeAgentCommand>> | null = null;
+    if (response.command) {
+      executionResult = await executeAgentCommand(response.command);
+    }
+    const assistantText = response.command
+      ? executionResult?.ok === false
+        ? `I tried ${describeCommand(response.command)}, but it failed: ${executionResult.message}`
+        : `I applied ${describeCommand(response.command)}.`
+      : response.degraded
+        ? `No trainer action: ${response.error || response.action?.reason || "live coach unavailable"}.`
+        : `No trainer action: ${response.action?.action || "none"}.`;
+
+    rememberLiveCoachTurn(
+      {
+        role: "assistant",
+        text: assistantText,
+        timestamp: Date.now(),
+        command: response.command ? describeCommand(response.command) : undefined,
+        execution: executionResult?.ok === false ? "failed" : response.command ? "applied" : "none",
+      },
+      response.command ? "action" : "status"
+    );
+
+    return { response, executionResult };
+  };
+
+  const describeCommand = (command: AgentCommand) => {
+    if (command.type === "set_erg_watts") return `ERG ${command.watts} W`;
+    if (command.type === "set_resistance") return `resistance ${command.percent}%`;
+    if (command.type === "set_workout_plan") {
+      const firstTarget = command.blocks[0]?.targetPower;
+      return firstTarget ? `workout plan from ${firstTarget} W` : "workout plan";
+    }
+    if (command.type === "send_message") return "coach message";
+    if (command.type === "request_rider_voice_feedback") return "voice feedback request";
+    if (command.type === "start_trainer") return "trainer start";
+    if (command.type === "stop_trainer") return "trainer stop";
+    if (command.type === "set_trainer_mode" && command.mode === "erg") {
+      return `ERG ${command.targetWatts} W`;
+    }
+    if (command.type === "set_trainer_mode" && command.mode === "resistance") {
+      return `resistance ${command.percent ?? command.level}%`;
+    }
+    return (command as { type: string }).type;
   };
 
   const requestCoachCheck = async () => {
     setCoachCheckState({
       status: "pending",
-      message: "Sending coach check...",
+      message: "Asking live coach...",
     });
 
-    const result = await hookCoachCheck(
-      currentSessionFilenameRef.current,
-      getHookSnapshot()
-    );
-
-    if ("sent" in result) {
-      const runId = extractHookRunId(result.response);
+    try {
+      const result = await sendLiveCoachTurn({
+        userText: "Coach check",
+        userKind: "status",
+      });
       setCoachCheckState({
-        status: "sent",
-        target: result.target,
-        targetUrl: result.targetUrl,
-        message: runId
-          ? `Forwarded to ${result.target}; run ${runId} was accepted.`
-          : `Forwarded to ${result.target}. Waiting for the agent to queue a message or command.`,
+        status: result.executionResult?.ok === false ? "error" : "sent",
+        target: "live llm",
+        message: result.response.command
+          ? result.executionResult?.ok === false
+            ? `Live coach chose ${describeCommand(result.response.command)}, but it failed: ${result.executionResult.message}`
+            : `${result.response.degraded ? "Degraded live coach" : "Live coach"} applied ${describeCommand(result.response.command)}.`
+          : `No trainer action from ${result.response.model || "live coach"} (${result.response.action?.action || "none"}).`,
       });
       return;
-    }
-
-    if ("skipped" in result) {
+    } catch (error) {
       setCoachCheckState({
-        status: "skipped",
-        message:
-          "No hook backend is configured. Set Hermes or OpenClaw env vars and restart Next.js.",
+        status: "error",
+        target: "live llm",
+        message: error instanceof Error ? error.message : String(error),
       });
-      return;
     }
-
-    setCoachCheckState({
-      status: "error",
-      target: result.target,
-      targetUrl: result.targetUrl,
-      message: result.error,
-    });
   };
 
   const requestManualRiderVoiceFeedback = () => {
@@ -625,6 +719,39 @@ export default function App() {
       durationSeconds: 10,
       reason: "Manual rider voice note",
     });
+  };
+
+  const sendLiveCoachText = async () => {
+    const text = liveCoachInput.trim();
+    if (!text || riderVoiceFeedback.status === "sending") return;
+    setLiveCoachInput("");
+    setRiderVoiceFeedback((state) => ({
+      ...state,
+      status: "sending",
+      audioNote: "",
+      message: "Asking live coach...",
+    }));
+
+    try {
+      const result = await sendLiveCoachTurn({ userText: text, userKind: "text" });
+      setRiderVoiceFeedback((state) => ({
+        ...state,
+        status: result.executionResult?.ok === false ? "error" : "sent",
+        target: "live llm",
+        message: result.response.command
+          ? result.executionResult?.ok === false
+            ? `Live coach chose ${describeCommand(result.response.command)}, but it failed: ${result.executionResult.message}`
+            : `${result.response.degraded ? "Degraded live coach" : "Live coach"} applied ${describeCommand(result.response.command)}.`
+          : `Chat sent; ${result.response.model || "live coach"} made no change.`,
+      }));
+    } catch (error) {
+      setRiderVoiceFeedback((state) => ({
+        ...state,
+        status: "error",
+        target: "live llm",
+        message: error instanceof Error ? error.message : String(error),
+      }));
+    }
   };
 
   const currentHrZone = heartRate 
@@ -687,6 +814,7 @@ export default function App() {
       activeTrainerMode,
       latestSample,
       workoutName: activeWorkoutNameRef.current,
+      remainingWorkout: workoutPlayerRef.current?.getRemainingWorkoutSnapshot() ?? null,
       sampleCount: samples.length,
       connectionState,
       hrConnectionState,
@@ -856,6 +984,7 @@ export default function App() {
     try {
       if (command.type === "set_erg_watts") {
         await setTrainerTargetPower(command.watts);
+        workoutPlayerRef.current?.applyErgOverrideUntilNextStep(command.watts);
       } else if (command.type === "set_resistance") {
         await setTrainerResistance(command.percent);
       } else if (command.type === "set_trainer_mode" && command.mode === "erg") {
@@ -863,6 +992,7 @@ export default function App() {
           throw new Error("set_trainer_mode erg requires targetWatts");
         }
         await setTrainerTargetPower(command.targetWatts);
+        workoutPlayerRef.current?.applyErgOverrideUntilNextStep(command.targetWatts);
       } else if (command.type === "set_trainer_mode" && command.mode === "resistance") {
         const level = typeof command.percent === "number" ? command.percent : command.level;
         if (typeof level !== "number") {
@@ -900,6 +1030,7 @@ export default function App() {
         timestamp: Date.now(),
         command,
       });
+      return { ok: true as const };
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       updateAgentJournal(command, "failed", message);
@@ -910,6 +1041,7 @@ export default function App() {
         command,
         message,
       });
+      return { ok: false as const, message };
     }
   };
 
@@ -1457,6 +1589,69 @@ export default function App() {
               </div>
             )}
 
+            <div className="flex min-h-[220px] flex-col rounded-md border bg-muted/20">
+              <div className="flex-1 space-y-2 overflow-y-auto p-3">
+                {liveCoachMessages.length === 0 ? (
+                  <div className="py-8 text-center text-xs text-muted-foreground">
+                    Ask the live coach by text or record an audio note.
+                  </div>
+                ) : (
+                  liveCoachMessages.map((message) => (
+                    <div
+                      key={message.id}
+                      className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
+                    >
+                      <div
+                        className={`max-w-[85%] rounded-md border px-3 py-2 text-xs ${
+                          message.role === "user"
+                            ? "border-primary/30 bg-primary/10"
+                            : message.execution === "failed"
+                              ? "border-red-500/30 bg-red-500/10 text-red-700"
+                              : "bg-background/80"
+                        }`}
+                      >
+                        <div className="mb-1 flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                          <span>{message.role === "user" ? "You" : "Live Coach"}</span>
+                          {message.kind === "audio" && <Mic className="h-3 w-3" />}
+                          {message.command && <span>{message.command}</span>}
+                        </div>
+                        <div>{message.text}</div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+              <div className="border-t bg-background/60 p-2">
+                <div className="flex gap-2">
+                  <input
+                    value={liveCoachInput}
+                    onChange={(e) => setLiveCoachInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        sendLiveCoachText();
+                      }
+                    }}
+                    placeholder="Ask: did you change power, make it easier, hold this..."
+                    className="min-w-0 flex-1 rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+                    disabled={riderVoiceFeedback.status === "sending"}
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={sendLiveCoachText}
+                    disabled={!liveCoachInput.trim() || riderVoiceFeedback.status === "sending"}
+                  >
+                    {riderVoiceFeedback.status === "sending" ? (
+                      <LoaderCircle className="animate-spin" />
+                    ) : (
+                      "Send"
+                    )}
+                  </Button>
+                </div>
+              </div>
+            </div>
+
             <Button
               variant="outline"
               size="sm"
@@ -1473,7 +1668,7 @@ export default function App() {
               variant="outline"
               size="sm"
               disabled={
-                !speechSupported ||
+                !audioRecordingSupported ||
                 riderVoiceFeedback.status === "listening" ||
                 riderVoiceFeedback.status === "sending"
               }
@@ -1557,9 +1752,9 @@ export default function App() {
                 )}
               </div>
               <div className="mt-1">{riderVoiceFeedback.message}</div>
-              {riderVoiceFeedback.transcript && (
+              {riderVoiceFeedback.audioNote && (
                 <div className="mt-2 rounded-sm bg-background/60 p-2 text-[11px]">
-                  {riderVoiceFeedback.transcript}
+                  {riderVoiceFeedback.audioNote}
                 </div>
               )}
               {riderVoiceFeedback.status === "listening" && (
@@ -1706,7 +1901,6 @@ export default function App() {
            onStopSession={handleStopSession}
            onWorkoutChange={(w) => activeWorkoutNameRef.current = w.name}
            getPlanRefreshSnapshot={getHookSnapshot}
-           sessionId={currentSessionFilenameRef.current}
            power={power}
            cadence={cadence}
            heartRate={heartRate}

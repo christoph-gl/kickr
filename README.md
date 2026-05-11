@@ -46,11 +46,15 @@ Fresh-agent default path:
 2. Optional image-to-workout extraction:
    Create a `.env.local` file in the root directory if you want screenshot imports. Add an AI SDK / Vercel AI Gateway-compatible key and a multimodal model that can read images:
    ```
+   LIVE_COACH_API_KEY=your_fast_llm_api_key_here
+   LIVE_COACH_MODEL=google/gemini-3-flash
+   LIVE_COACH_TIMEOUT_MS=3500
+
    WORKOUT_IMAGE_EXTRACTOR_API_KEY=your_image_capable_ai_api_key_here
    WORKOUT_IMAGE_EXTRACTOR_MODEL=google/gemini-3-flash
    ```
 
-   Plain trainer control, workout playback, and local agent commands work without these values. The app still accepts the older `AI_GATEWAY_API_KEY` / `AI_GATEWAY_MODEL` names as a compatibility fallback.
+   Plain trainer control, workout playback, and local agent commands work without these values. Live coach checks and Adaptive Freeride plan refreshes need `LIVE_COACH_API_KEY` or the compatibility fallback `AI_GATEWAY_API_KEY`. The app still accepts the older `AI_GATEWAY_API_KEY` / `AI_GATEWAY_MODEL` names as a compatibility fallback.
 
    Do not create `.env.local` by blindly copying `.env.example`; leave optional placeholders unset unless you have real values.
 
@@ -68,6 +72,15 @@ Fresh-agent default path:
    OPENCLAW_HOOKS_URL=http://127.0.0.1:<openclaw-port>/hooks/kickr
    OPENCLAW_HOOKS_TOKEN=replace-with-dedicated-hook-token
    ```
+
+   For OpenClaw, make hook runs stable and allow the narrow KICKR callback command once:
+   ```bash
+   openclaw config set hooks.defaultSessionKey kickr-local-coach
+   openclaw gateway restart
+   openclaw approvals allowlist add --agent main --gateway 'curl -sS -X POST http://localhost:*/api/agent/commands*'
+   ```
+
+   If an agent cannot reach the callback URL shown in the coach-check UI, set `AGENT_CALLBACK_BASE_URL` to a URL reachable from that agent.
 
    Restart `next dev` after editing `.env.local` — Next.js only reads env vars at server start.
 
@@ -136,7 +149,7 @@ Supported command types:
 
 Use `set_erg_watts` as the canonical ERG command. The browser also accepts `{"type":"set_trainer_mode","mode":"erg","targetWatts":220}` as a compatibility fallback for agents that already emit that shape, but fresh integrations should prefer `set_erg_watts`.
 
-`request_rider_voice_feedback` opens a visible 10-second browser speech-recognition window in Chrome/Edge, then forwards the transcript as a `rider_feedback` hook. The current implementation uses browser Web Speech recognition first; agent-side STT can be added later by attaching recorded audio to the same feedback flow once the target agent exposes a concrete audio/STT endpoint.
+`request_rider_voice_feedback` opens a visible 10-second browser mic window in Chrome/Edge. For the in-app live coach lane, the browser records audio and sends it directly to the multimodal model instead of sending a speech transcript.
 
 Read recent agent/ride events:
 
@@ -182,7 +195,11 @@ Use the cog button in the top right of the app to edit these values manually.
 
 ## Local Agent Architecture
 
-The browser owns Bluetooth. External agents (Hermes, OpenClaw, ...) operate through local HTTP — they never speak FTMS or talk to the trainer directly. Two directions:
+The browser owns Bluetooth. Time-sensitive in-ride coaching uses the app-owned `POST /api/coach/live` endpoint, which calls a fast AI SDK model directly and returns one structured command for the browser to apply immediately. Use this for manual coach checks, rider voice feedback, and Adaptive Freeride plan refreshes. Rider voice feedback is recorded with `MediaRecorder` and sent as audio to the multimodal model; the browser does not send a speech transcript.
+
+When the live coach changes ERG watts during an active workout, the workout track is updated visually from the current elapsed second until the next planned step. The later planned workout structure remains intact.
+
+External agents (Hermes, OpenClaw, ...) remain useful for slower work: pre-ride route/workout planning, creating workouts from scratch, end-of-ride ingestion, and adapting rider memory or profile data. They operate through local HTTP and never speak FTMS or talk to the trainer directly. Two directions:
 
 - **Agent -> KICKR:** queue commands via `POST /api/agent/commands`. Read context via `GET /api/rider`, `GET /api/sessions`, `GET /api/agent/events?limit=200`.
 - **KICKR -> agent wakeups:** the browser calls `POST /api/agent/hooks/trigger`. The server route picks an adapter from env vars:
@@ -190,11 +207,11 @@ The browser owns Bluetooth. External agents (Hermes, OpenClaw, ...) operate thro
   - `OPENCLAW_HOOKS_URL` (+ `OPENCLAW_HOOKS_TOKEN`) -> mapped OpenClaw `/hooks/kickr`.
   - Hermes wins if both are set. Neither set -> the route returns `{skipped: true}` and never throws.
 
-The hook payload includes a compact `runtimeContract` and ride snapshot so a live agent does not need to reread repo docs before acting. Manual coach checks use `mode:"fast"`: the agent should prefer one short `send_message` and avoid fetching history unless the included context is clearly insufficient.
+The hook payload includes a compact `runtimeContract` and ride snapshot so an external agent does not need to reread repo docs before acting. Manual coach-check hook support remains for compatibility, but the in-app live coach path is preferred during active rides. For OpenClaw, the callback instruction is also embedded in the top-level hook `message` because common hook mappings only pass `message`, `event`, `sessionId`, and `snapshot` into the agent run.
 
 The hook trigger response confirms forwarding only: target backend, local target URL, HTTP status, and any response body/run id returned by Hermes/OpenClaw. Actual agent processing is confirmed later when the agent queues a `send_message`, trainer command, or event through the KICKR APIs.
 
-Initial wake events are intentionally minimal: `ride_started`, `ride_ended`, `rider_feedback`, and manual `coach_check` from the Agent Controller panel. Physiological triggers (high HR, cadence collapse) are later work.
+Initial wake events are intentionally minimal: `ride_started`, `ride_ended`, `rider_feedback`, and manual `coach_check`. Prefer `/api/coach/live` for active-ride feedback and coach checks; use wake events for asynchronous agent workflows. Physiological triggers (high HR, cadence collapse) are later work.
 
 ### Install-once skill model
 

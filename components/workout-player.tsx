@@ -19,7 +19,7 @@ import { WorkoutChart } from "./workout-chart";
 import { Button } from "./ui/button";
 import { RIDER_PROFILE, type RiderProfile } from "@/lib/profile";
 import { audioService } from "@/lib/audio";
-import { hookPlanRefresh } from "@/lib/openclaw-hooks";
+import type { AgentCommand } from "@/lib/agent";
 import {
   Dialog,
   DialogContent,
@@ -31,6 +31,8 @@ import {
 
 export type WorkoutPlayerHandle = {
   applyPlanCommand: (blocks: WorkoutBlock[], leadSeconds?: number) => void;
+  applyErgOverrideUntilNextStep: (watts: number) => void;
+  getRemainingWorkoutSnapshot: () => RemainingWorkoutSnapshot;
 };
 
 type WorkoutPlayerProps = {
@@ -38,7 +40,6 @@ type WorkoutPlayerProps = {
   onStopSession: (workoutName: string) => void;
   onWorkoutChange?: (workout: Workout) => void;
   getPlanRefreshSnapshot?: () => unknown;
-  sessionId?: string | null;
   disabled: boolean;
   power?: number;
   cadence?: number;
@@ -48,13 +49,29 @@ type WorkoutPlayerProps = {
   riderProfile?: RiderProfile;
 };
 
+type RemainingWorkoutSnapshot = {
+  workoutId: string;
+  workoutName: string;
+  isPlaying: boolean;
+  elapsedSeconds: number;
+  totalDurationSeconds: number;
+  remainingSeconds: number;
+  currentTargetPower: number | null;
+  remainingBlocks: Array<{
+    offsetSeconds: number;
+    durationSeconds: number;
+    targetPower: number;
+    isCurrent: boolean;
+  }>;
+  truncated: boolean;
+};
+
 export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>(function WorkoutPlayer(
   {
     onPowerTargetChange,
     onStopSession,
     onWorkoutChange,
     getPlanRefreshSnapshot,
-    sessionId,
     disabled,
     power,
     cadence,
@@ -119,12 +136,128 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
     [clampPlanWatts]
   );
 
+  const mergeAdjacentBlocks = useCallback((blocks: WorkoutBlock[]) => {
+    const merged: WorkoutBlock[] = [];
+    for (const block of blocks) {
+      if (block.durationSeconds <= 0) continue;
+      const previous = merged[merged.length - 1];
+      if (previous && previous.targetPower === block.targetPower) {
+        previous.durationSeconds += block.durationSeconds;
+      } else {
+        merged.push({ ...block });
+      }
+    }
+    return merged;
+  }, []);
+
+  const applyErgOverrideUntilNextStep = useCallback(
+    (watts: number) => {
+      const overrideWatts = clampPlanWatts(Math.round(Number(watts) || 0));
+      const elapsed = Math.max(0, Math.round(elapsedSecondsRef.current));
+
+      setWorkout((prev) => {
+        let acc = 0;
+        const nextBlocks: WorkoutBlock[] = [];
+        let applied = false;
+
+        for (const block of prev.blocks) {
+          const blockStart = acc;
+          const blockEnd = acc + block.durationSeconds;
+          acc = blockEnd;
+
+          if (applied || elapsed >= blockEnd) {
+            nextBlocks.push(block);
+            continue;
+          }
+
+          if (elapsed <= blockStart) {
+            nextBlocks.push({ durationSeconds: block.durationSeconds, targetPower: overrideWatts });
+            applied = true;
+            continue;
+          }
+
+          nextBlocks.push({
+            durationSeconds: elapsed - blockStart,
+            targetPower: block.targetPower,
+          });
+          nextBlocks.push({
+            durationSeconds: blockEnd - elapsed,
+            targetPower: overrideWatts,
+          });
+          applied = true;
+        }
+
+        if (!applied) return prev;
+        return { ...prev, blocks: mergeAdjacentBlocks(nextBlocks) };
+      });
+
+      lastTargetRef.current = overrideWatts;
+    },
+    [clampPlanWatts, mergeAdjacentBlocks]
+  );
+
+  const getRemainingWorkoutSnapshot = useCallback((): RemainingWorkoutSnapshot => {
+    const elapsed = Math.max(0, Math.round(elapsedSeconds));
+    const totalDurationSeconds = workout.blocks.reduce(
+      (total, block) => total + block.durationSeconds,
+      0
+    );
+    const remainingBlocks: RemainingWorkoutSnapshot["remainingBlocks"] = [];
+    let acc = 0;
+    let offsetSeconds = 0;
+    let currentTargetPower: number | null = null;
+
+    for (const block of workout.blocks) {
+      const blockStart = acc;
+      const blockEnd = acc + block.durationSeconds;
+      acc = blockEnd;
+
+      if (elapsed >= blockEnd) continue;
+
+      const remainingStart = Math.max(elapsed, blockStart);
+      const durationSeconds = Math.max(0, blockEnd - remainingStart);
+      if (durationSeconds <= 0) continue;
+
+      const isCurrent = elapsed >= blockStart && elapsed < blockEnd;
+      if (isCurrent) {
+        currentTargetPower = block.targetPower;
+      }
+
+      const previous = remainingBlocks[remainingBlocks.length - 1];
+      if (previous && previous.targetPower === block.targetPower) {
+        previous.durationSeconds += durationSeconds;
+      } else {
+        remainingBlocks.push({
+          offsetSeconds,
+          durationSeconds,
+          targetPower: block.targetPower,
+          isCurrent,
+        });
+      }
+      offsetSeconds += durationSeconds;
+    }
+
+    return {
+      workoutId: workout.id,
+      workoutName: workout.name,
+      isPlaying,
+      elapsedSeconds: elapsed,
+      totalDurationSeconds,
+      remainingSeconds: Math.max(0, totalDurationSeconds - elapsed),
+      currentTargetPower,
+      remainingBlocks: remainingBlocks.slice(0, 30),
+      truncated: remainingBlocks.length > 30,
+    };
+  }, [elapsedSeconds, isPlaying, workout]);
+
   useImperativeHandle(
     ref,
     () => ({
       applyPlanCommand,
+      applyErgOverrideUntilNextStep,
+      getRemainingWorkoutSnapshot,
     }),
-    [applyPlanCommand]
+    [applyErgOverrideUntilNextStep, applyPlanCommand, getRemainingWorkoutSnapshot]
   );
 
   // Wake Lock implementation
@@ -191,7 +324,7 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
     return () => clearInterval(interval);
   }, [isPlaying]);
 
-  // Refs to keep the plan_refresh ticker stable. Without these the effect
+  // Refs to keep the adaptive-plan ticker stable. Without these the effect
   // tore down and re-fired every time `workout` or `lastPlanReceivedAt`
   // changed (i.e. every time the agent applied a plan), causing a feedback
   // loop of wake-ups.
@@ -210,7 +343,7 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
     planSnapshotGetterRef.current = getPlanRefreshSnapshot;
   }, [getPlanRefreshSnapshot]);
 
-  // Adaptive freeride: fire plan_refresh hook every 2 min while playing.
+  // Adaptive freeride: ask the in-app low-latency coach for the next plan.
   useEffect(() => {
     if (!adaptive || !isPlaying) {
       setNextRefreshAt(null);
@@ -219,7 +352,7 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
 
     let cancelled = false;
 
-    const fire = () => {
+    const fire = async () => {
       if (cancelled) return;
       const horizonSeconds = 600;
       const baseSnapshot = (planSnapshotGetterRef.current?.() ?? {}) as Record<string, unknown>;
@@ -237,15 +370,38 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
         acc = end;
       }
 
-      hookPlanRefresh(sessionId ?? null, {
-        ...baseSnapshot,
-        adaptive: true,
-        elapsedSeconds: elapsedSecondsRef.current,
-        horizonSeconds,
-        currentBlock,
-        remainingPlannedSeconds: remaining,
-        lastPlanReceivedAt: lastPlanReceivedAtRef.current,
-      });
+      try {
+        const res = await fetch("/api/coach/live", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            intent: "adaptive_plan",
+            snapshot: {
+              ...baseSnapshot,
+              adaptive: true,
+              elapsedSeconds: elapsedSecondsRef.current,
+              horizonSeconds,
+              currentBlock,
+              remainingPlannedSeconds: remaining,
+              lastPlanReceivedAt: lastPlanReceivedAtRef.current,
+            },
+          }),
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok) {
+          throw new Error(data?.error || "Adaptive plan request failed");
+        }
+
+        const command = data?.command as AgentCommand | null | undefined;
+        if (command?.type === "set_workout_plan") {
+          applyPlanCommand(
+            command.blocks,
+            typeof command.leadSeconds === "number" ? command.leadSeconds : 20
+          );
+        }
+      } catch (error) {
+        console.error("Failed to refresh adaptive plan:", error);
+      }
 
       setNextRefreshAt(Date.now() + 120_000);
     };
@@ -258,7 +414,7 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
       cancelled = true;
       clearInterval(interval);
     };
-  }, [adaptive, isPlaying, sessionId]);
+  }, [adaptive, applyPlanCommand, isPlaying]);
 
   // Lightweight 1s tick to drive the "next refresh in N s" badge.
   useEffect(() => {
@@ -495,7 +651,7 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
               setLastPlanReceivedAt(null);
             }}
             disabled={isPlaying}
-            title="Start an LLM-coached freeride. Begins at 80 W; the agent updates the plan every 2 minutes."
+            title="Start an LLM-coached freeride. Begins at 80 W; the live coach updates the plan every 2 minutes."
           >
             {adaptive ? "Adaptive Loaded" : "Adaptive Freeride"}
           </Button>

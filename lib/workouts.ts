@@ -197,7 +197,7 @@ export const ADAPTIVE_FREERIDE: Workout = {
   id: ADAPTIVE_FREERIDE_ID,
   name: "Adaptive Freeride",
   description:
-    "LLM-coached freeride starting at 80 W. Plan refreshes every 2 minutes from live telemetry.",
+    "LLM-coached freeride starting at 80 W. The in-app live coach refreshes the plan every 2 minutes from live telemetry.",
   blocks: [{ durationSeconds: 60 * 60, targetPower: 80 }],
 };
 

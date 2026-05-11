@@ -1,7 +1,7 @@
 ---
-kickr-skill-version: 2
+kickr-skill-version: 3
 name: kickr-local-coach
-description: Coach a rider using the KICKR CORE 2 Web Controller. Read live ride context and queue trainer commands, coaching messages, or adaptive workout plans over local HTTP. Use when the rider asks for KICKR coaching, ride status, ERG/resistance changes, post-ride summary, or when a KICKR hook (including plan_refresh during adaptive freeride) wakes you.
+description: Coach a rider using the KICKR CORE 2 Web Controller. Read ride context and queue trainer commands, coaching messages, or workout plans over local HTTP. Use for pre-ride planning, ride status, ERG/resistance changes, post-ride summary, rider memory updates, or when a KICKR hook wakes you.
 ---
 
 # KICKR Local Coach (OpenClaw)
@@ -82,11 +82,11 @@ On wake (non-adaptive events):
 3. Decide: send one message, queue one trainer command, request rider voice feedback, or do nothing.
 4. Keep responses short during a ride.
 
-Fast coach checks should usually queue one `send_message` under 12 words. Use `runtimeContract.commandEndpoint` for commands.
+Fast coach checks should usually queue one `send_message` under 12 words. Use `runtimeContract.commandEndpoint` for commands. If OpenClaw's hook mapping only gives you the rendered message, follow the callback URL embedded in that message; plain final answers do not reach the KICKR UI. The KICKR app's active-ride UI now prefers its direct `/api/coach/live` lane for low-latency checks, so OpenClaw wakeups are mainly for compatibility and deeper asynchronous work.
 
 ### `plan_refresh` (Adaptive Freeride)
 
-Fires every 2 minutes while the rider has the **Adaptive Freeride** session playing. Snapshot includes:
+Deprecated for normal app operation. The KICKR app now refreshes **Adaptive Freeride** through `/api/coach/live` directly so it can avoid OpenClaw round-trip and command-polling lag. If an older app version still wakes you with `plan_refresh`, handle it as below.
 
 ```json
 {
