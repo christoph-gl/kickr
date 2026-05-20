@@ -45,24 +45,17 @@ Fresh-agent default path:
    npm install
    ```
 
-2. Optional image-to-workout extraction:
-   Create a `.env.local` file in the root directory if you want screenshot imports. Add an AI SDK / Vercel AI Gateway-compatible key and a multimodal model that can read images:
+2. Optional LLM features:
+   Create a `.env.local` file in the root directory for in-app coaching, summaries, and screenshot imports:
    ```
-   LIVE_COACH_API_KEY=your_fast_llm_api_key_here
-   LIVE_COACH_MODEL=google/gemini-3-flash
-   LIVE_COACH_TIMEOUT_MS=3500
-
-   WORKOUT_BUILDER_API_KEY=your_workout_builder_llm_api_key_here
-   WORKOUT_BUILDER_MODEL=google/gemini-3-flash
-
-   RIDE_SUMMARY_API_KEY=your_post_ride_summary_llm_api_key_here
-   RIDE_SUMMARY_MODEL=google/gemini-3-flash
+   LLM_CALLS_API_KEY=your_llm_api_key_here
+   LLM_CALLS_MODEL=google/gemini-3-flash
 
    WORKOUT_IMAGE_EXTRACTOR_API_KEY=your_image_capable_ai_api_key_here
    WORKOUT_IMAGE_EXTRACTOR_MODEL=google/gemini-3-flash
    ```
 
-   Plain trainer control, workout playback, and local agent commands work without these values. Live coach checks and Adaptive Freeride plan refreshes need `LIVE_COACH_API_KEY` or the compatibility fallback `AI_GATEWAY_API_KEY`. The workout builder can use `WORKOUT_BUILDER_API_KEY`, then falls back through `RIDE_SUMMARY_API_KEY`, `LIVE_COACH_API_KEY`, `WORKOUT_IMAGE_EXTRACTOR_API_KEY`, and `AI_GATEWAY_API_KEY`. Post-ride summaries can use `RIDE_SUMMARY_API_KEY`, then fall back through `LIVE_COACH_API_KEY`, `WORKOUT_IMAGE_EXTRACTOR_API_KEY`, and `AI_GATEWAY_API_KEY`. The app still accepts the older `AI_GATEWAY_API_KEY` / `AI_GATEWAY_MODEL` names as a compatibility fallback.
+   Plain trainer control, workout playback, and local agent commands work without these values. Text LLM lanes (live coach, workout builder, ride/monthly summaries) use `LLM_CALLS_API_KEY` / `LLM_CALLS_MODEL`, with optional per-lane overrides such as `LIVE_COACH_API_KEY` or `RIDE_SUMMARY_API_KEY`, then `AI_GATEWAY_API_KEY` / `AI_GATEWAY_MODEL` as a legacy fallback. Screenshot import uses only `WORKOUT_IMAGE_EXTRACTOR_*` (not `LLM_CALLS_*`).
 
    Do not create `.env.local` by blindly copying `.env.example`; leave optional placeholders unset unless you have real values.
 

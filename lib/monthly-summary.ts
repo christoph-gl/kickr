@@ -2,6 +2,7 @@ import { generateObject } from "ai";
 import { z } from "zod";
 import type { RiderProfile } from "./profile";
 import type { RideSession } from "./sessions";
+import { ensureAiGatewayApiKey, llmCallsApiKey, llmCallsModel } from "./llm-calls-env";
 
 export type MonthlyTrainingSummary = {
   headline: string;
@@ -17,13 +18,12 @@ export type MonthlyTrainingSummary = {
 const monthlySummaryApiKey =
   process.env.MONTHLY_SUMMARY_API_KEY ||
   process.env.RIDE_SUMMARY_API_KEY ||
-  process.env.AI_GATEWAY_API_KEY;
+  llmCallsApiKey;
 
 const monthlySummaryModel =
   process.env.MONTHLY_SUMMARY_MODEL ||
   process.env.RIDE_SUMMARY_MODEL ||
-  process.env.AI_GATEWAY_MODEL ||
-  "google/gemini-3-flash";
+  llmCallsModel;
 
 const MonthlySummarySchema = z.object({
   headline: z.string().max(100),
@@ -136,12 +136,12 @@ export async function summarizeMonth(
     throw new Error(`No rides found for ${month}`);
   }
   if (!monthlySummaryApiKey) {
-    throw new Error("MONTHLY_SUMMARY_API_KEY, RIDE_SUMMARY_API_KEY, or AI_GATEWAY_API_KEY is not configured");
+    throw new Error(
+      "MONTHLY_SUMMARY_API_KEY, RIDE_SUMMARY_API_KEY, LLM_CALLS_API_KEY, or AI_GATEWAY_API_KEY is not configured"
+    );
   }
 
-  if (!process.env.AI_GATEWAY_API_KEY) {
-    process.env.AI_GATEWAY_API_KEY = monthlySummaryApiKey;
-  }
+  ensureAiGatewayApiKey(monthlySummaryApiKey);
 
   const payload = buildMonthlyPayload(month, monthSessions, riderProfile);
   const result = await generateObject({

@@ -3,18 +3,14 @@ import { z } from "zod";
 import { NextResponse } from "next/server";
 import type { AgentCommand } from "@/lib/agent";
 import { makeAgentCommandId } from "@/lib/agent";
+import { ensureAiGatewayApiKey, llmCallsApiKey, llmCallsModel } from "@/lib/llm-calls-env";
 
 export const dynamic = "force-dynamic";
 
-const liveCoachApiKey =
-  process.env.LIVE_COACH_API_KEY ||
-  process.env.WORKOUT_IMAGE_EXTRACTOR_API_KEY ||
-  process.env.AI_GATEWAY_API_KEY;
+const liveCoachApiKey = process.env.LIVE_COACH_API_KEY || llmCallsApiKey;
 
 const liveCoachModel =
-  process.env.LIVE_COACH_MODEL ||
-  process.env.AI_GATEWAY_MODEL ||
-  "google/gemini-3-flash";
+  process.env.LIVE_COACH_MODEL || llmCallsModel;
 
 const liveCoachTimeoutMs = Math.min(
   30_000,
@@ -251,8 +247,30 @@ function compactSnapshot(value: unknown) {
   if (!snapshot) return null;
   const latestSample = getRecord(snapshot.latestSample);
   const riderProfile = getRecord(snapshot.riderProfile);
+  const fourDP = getRecord(riderProfile?.fourDP);
+  const rolling = getRecord(snapshot.rolling);
+  const rollingSnapshots = Array.isArray(rolling?.snapshots)
+    ? rolling.snapshots
+        .slice(-20)
+        .map((item) => {
+          const record = getRecord(item);
+          if (!record) return null;
+          return {
+            offsetSeconds: compactNumber(record.offsetSeconds),
+            durationSeconds: compactNumber(record.durationSeconds),
+            avgPowerW: compactNumber(record.avgPowerW),
+            avgCadenceRpm: compactNumber(record.avgCadenceRpm),
+            avgHeartRateBpm: compactNumber(record.avgHeartRateBpm),
+            targetPower: compactNumber(record.targetPower),
+            hrZone: compactString(record.hrZone, 80),
+          };
+        })
+        .filter(Boolean)
+    : [];
+  const rideSoFar = getRecord(rolling?.rideSoFar);
 
   return {
+    generatedAtIso: compactString(snapshot.generatedAtIso, 40),
     connectionState: compactString(snapshot.connectionState, 40),
     hrConnectionState: compactString(snapshot.hrConnectionState, 40),
     activeTrainerMode: snapshot.activeTrainerMode ?? null,
@@ -264,13 +282,46 @@ function compactSnapshot(value: unknown) {
           heartRateBpm: compactNumber(latestSample.heartRateBpm),
         }
       : null,
-    rolling: snapshot.rolling ?? null,
+    rolling: rolling
+      ? {
+          sampleWindowSeconds: compactNumber(rolling.sampleWindowSeconds),
+          rideSoFar: rideSoFar
+            ? {
+                elapsedSeconds: compactNumber(rideSoFar.elapsedSeconds),
+                avgPowerW: compactNumber(rideSoFar.avgPowerW),
+                avgCadenceRpm: compactNumber(rideSoFar.avgCadenceRpm),
+                avgHeartRateBpm: compactNumber(rideSoFar.avgHeartRateBpm),
+              }
+            : null,
+          snapshots: rollingSnapshots,
+        }
+      : null,
     currentHrZone: snapshot.currentHrZone ?? null,
     riderProfile: riderProfile
       ? {
-          ftp: compactNumber(riderProfile.ftp),
-          map: compactNumber(riderProfile.map),
+          ftp: compactNumber(fourDP?.ftp ?? riderProfile.ftp),
+          map: compactNumber(fourDP?.map ?? riderProfile.map),
+          ac: compactNumber(fourDP?.ac ?? riderProfile.ac),
+          nm: compactNumber(fourDP?.nm ?? riderProfile.nm),
           cTHR: compactNumber(riderProfile.cTHR),
+          age: compactNumber(riderProfile.age),
+          weightKg: compactNumber(riderProfile.weightKg),
+          gender: compactString(riderProfile.gender, 40),
+          hrZones: Array.isArray(riderProfile.hrZones)
+            ? riderProfile.hrZones
+                .map((zone) => {
+                  const record = getRecord(zone);
+                  if (!record) return null;
+                  return {
+                    id: compactString(record.id, 20),
+                    name: compactString(record.name, 80),
+                    percentageRange: compactString(record.percentageRange, 40),
+                    minBpm: compactNumber(record.minBpm),
+                    maxBpm: compactNumber(record.maxBpm),
+                  };
+                })
+                .filter(Boolean)
+            : [],
           memorySummary: compactString(riderProfile.memorySummary, 260),
         }
       : null,
@@ -296,7 +347,10 @@ export async function POST(request: Request) {
   const body = (await request.json()) as Record<string, unknown>;
 
   const snapshot = body?.snapshot ?? null;
-  const intent = body?.intent === "adaptive_plan" ? "adaptive_plan" : "coach_check";
+  const intent =
+    body?.intent === "adaptive_plan" || body?.intent === "periodic_ride_check"
+      ? body.intent
+      : "coach_check";
   const riderText = typeof body?.riderText === "string" ? body.riderText : "";
   const conversationHistory = compactConversationHistory(body?.conversationHistory);
   const compactedSnapshot = compactSnapshot(snapshot);
@@ -305,15 +359,13 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         error:
-          "No live coach API key configured. Set LIVE_COACH_API_KEY or AI_GATEWAY_API_KEY.",
+          "No live coach API key configured. Set LIVE_COACH_API_KEY, LLM_CALLS_API_KEY, or AI_GATEWAY_API_KEY.",
       },
       { status: 503 }
     );
   }
 
-  if (!process.env.AI_GATEWAY_API_KEY) {
-    process.env.AI_GATEWAY_API_KEY = liveCoachApiKey;
-  }
+  ensureAiGatewayApiKey(liveCoachApiKey);
 
   try {
     if (isLikelyWorkoutPlanEdit(riderText, compactedSnapshot)) {
@@ -394,6 +446,7 @@ Available executable actions:
 - send_message: rider-facing text only; it does not change trainer load.
 Do not use send_message when the rider clearly asks to change watts or resistance and the snapshot says the trainer is connected.
 For coach_check without a specific rider request, prefer a short rider-facing cue under 12 words unless telemetry clearly calls for ERG or resistance adjustment.
+For periodic_ride_check during a preplanned workout, return send_message only. Use the rider profile, heart-rate zones, 30-second rolling snapshots, and remainingWorkout to give one short motivating cue under 18 words. Do not return set_workout_plan, set_erg_watts, or set_resistance for periodic_ride_check.
 When rider text is included, treat it as the latest chat message from the rider.
 Use set_workout_plan for requests that mention the workout, track, plan, remaining work, rest of workout, next N minutes, compressing duration, stretching duration, or scaling effort over time.
 snapshot.remainingWorkout.remainingBlocks is the source of truth for the remaining track. It starts at the rider's current point with offsetSeconds 0 and includes durationSeconds and targetPower for each block.

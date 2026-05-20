@@ -1,6 +1,7 @@
 import { generateObject } from "ai";
 import { z } from "zod";
 import { NextResponse } from "next/server";
+import { ensureAiGatewayApiKey, llmCallsApiKey, llmCallsModel } from "@/lib/llm-calls-env";
 import { getRiderProfileFromDb, listRideSessions } from "@/lib/db";
 import { calculateWorkoutMetrics, type Workout, type WorkoutBlock } from "@/lib/workouts";
 
@@ -10,16 +11,13 @@ const workoutBuilderApiKey =
   process.env.WORKOUT_BUILDER_API_KEY ||
   process.env.RIDE_SUMMARY_API_KEY ||
   process.env.LIVE_COACH_API_KEY ||
-  process.env.WORKOUT_IMAGE_EXTRACTOR_API_KEY ||
-  process.env.AI_GATEWAY_API_KEY;
+  llmCallsApiKey;
 
 const workoutBuilderModel =
   process.env.WORKOUT_BUILDER_MODEL ||
   process.env.RIDE_SUMMARY_MODEL ||
   process.env.LIVE_COACH_MODEL ||
-  process.env.WORKOUT_IMAGE_EXTRACTOR_MODEL ||
-  process.env.AI_GATEWAY_MODEL ||
-  "google/gemini-3-flash";
+  llmCallsModel;
 
 const WorkoutBuilderSchema = z.object({
   name: z.string().max(80),
@@ -116,13 +114,14 @@ export async function POST(req: Request) {
     }
     if (!workoutBuilderApiKey) {
       return NextResponse.json(
-        { error: "WORKOUT_BUILDER_API_KEY or AI_GATEWAY_API_KEY is not configured" },
+        {
+          error:
+            "WORKOUT_BUILDER_API_KEY, LLM_CALLS_API_KEY, or AI_GATEWAY_API_KEY is not configured",
+        },
         { status: 500 }
       );
     }
-    if (!process.env.AI_GATEWAY_API_KEY) {
-      process.env.AI_GATEWAY_API_KEY = workoutBuilderApiKey;
-    }
+    ensureAiGatewayApiKey(workoutBuilderApiKey);
 
     const riderProfile = getRiderProfileFromDb();
     const recentSessions = listRideSessions().slice(0, 5).map(compactSession);

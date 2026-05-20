@@ -43,8 +43,8 @@ If the user only gave the GitHub URL and then says “implement it”, “first�
 
    ```bash
    cat > .env.local <<'EOF'
-   LIVE_COACH_API_KEY=<paste from user>
-   LIVE_COACH_MODEL=google/gemini-3-flash
+   LLM_CALLS_API_KEY=<paste from user>
+   LLM_CALLS_MODEL=google/gemini-3-flash
    WORKOUT_IMAGE_EXTRACTOR_API_KEY=<paste from user>
    WORKOUT_IMAGE_EXTRACTOR_MODEL=google/gemini-3-flash
    EOF

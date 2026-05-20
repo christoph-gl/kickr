@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { BikeSample } from "./kickr-client";
 import type { RiderProfile } from "./profile";
 import type { RideLlmSummary, RideSession } from "./sessions";
+import { ensureAiGatewayApiKey, llmCallsApiKey, llmCallsModel } from "./llm-calls-env";
 
 type NumericSampleKey = "powerW" | "cadenceRpm" | "speedKph" | "resistance" | "heartRateBpm";
 
@@ -14,14 +15,12 @@ export type RideSummaryInput = {
 const rideSummaryApiKey =
   process.env.RIDE_SUMMARY_API_KEY ||
   process.env.LIVE_COACH_API_KEY ||
-  process.env.WORKOUT_IMAGE_EXTRACTOR_API_KEY ||
-  process.env.AI_GATEWAY_API_KEY;
+  llmCallsApiKey;
 
 const rideSummaryModel =
   process.env.RIDE_SUMMARY_MODEL ||
   process.env.LIVE_COACH_MODEL ||
-  process.env.AI_GATEWAY_MODEL ||
-  "google/gemini-3-flash";
+  llmCallsModel;
 
 const RideSummarySchema = z.object({
   headline: z.string().max(90),
@@ -269,12 +268,13 @@ export async function summarizeRideSession(
   input: RideSummaryInput
 ): Promise<{ summary?: RideLlmSummary; status: "skipped" | "generated" | "failed"; error?: string }> {
   if (!rideSummaryApiKey) {
-    return { status: "skipped", error: "RIDE_SUMMARY_API_KEY or AI_GATEWAY_API_KEY is not configured" };
+    return {
+      status: "skipped",
+      error: "RIDE_SUMMARY_API_KEY, LLM_CALLS_API_KEY, or AI_GATEWAY_API_KEY is not configured",
+    };
   }
 
-  if (!process.env.AI_GATEWAY_API_KEY) {
-    process.env.AI_GATEWAY_API_KEY = rideSummaryApiKey;
-  }
+  ensureAiGatewayApiKey(rideSummaryApiKey);
 
   try {
     const payload = buildRideSummaryPayload(input);

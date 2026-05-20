@@ -43,10 +43,35 @@ type WorkoutPlayerProps = {
   power?: number;
   cadence?: number;
   heartRate?: number;
-  currentHrZone?: any;
-  activeTrainerMode: any;
+  currentHrZone?: RiderProfile["hrZones"][number];
+  activeTrainerMode:
+    | { type: "none" }
+    | { type: "erg"; watts: number }
+    | { type: "resistance"; level: number };
   riderProfile?: RiderProfile;
 };
+
+type WakeLockCapableNavigator = Navigator & {
+  wakeLock?: {
+    request: (type: "screen") => Promise<{ release: () => Promise<void> }>;
+  };
+};
+
+type TelemetrySnapshot = {
+  offsetSeconds: number;
+  durationSeconds: number;
+  avgPowerW: number | null;
+  avgCadenceRpm: number | null;
+  avgHeartRateBpm: number | null;
+  targetPower: number | null;
+  hrZone: string | null;
+};
+
+function averageNullable(values: Array<number | undefined>) {
+  const present = values.filter((value): value is number => typeof value === "number");
+  if (present.length === 0) return null;
+  return Math.round(present.reduce((total, value) => total + value, 0) / present.length);
+}
 
 type RemainingWorkoutSnapshot = {
   workoutId: string;
@@ -100,12 +125,25 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
   const [unsavedBuiltWorkoutId, setUnsavedBuiltWorkoutId] = useState<string | null>(null);
   const [isSavingBuiltWorkout, setIsSavingBuiltWorkout] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [liveCoachFeedback, setLiveCoachFeedback] = useState<string | null>(null);
+  const [liveCoachDetail, setLiveCoachDetail] = useState<string | null>(null);
+  const [liveCoachStatus, setLiveCoachStatus] = useState<"idle" | "checking" | "error">("idle");
   const [upcomingChange, setUpcomingChange] = useState<{ nextTarget: number, currentTarget: number, seconds: number } | null>(null);
   const lastTargetRef = useRef<number | null>(null);
   const elapsedSecondsRef = useRef(0);
+  const telemetrySamplesRef = useRef<Array<{
+    elapsedSeconds: number;
+    power?: number;
+    cadence?: number;
+    heartRate?: number;
+    targetPower: number | null;
+    hrZoneName: string | null;
+  }>>([]);
+  const liveCoachRunningRef = useRef(false);
+  const lastLiveCoachCheckSecondRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const zwoFileInputRef = useRef<HTMLInputElement>(null);
-  const wakeLockRef = useRef<any>(null);
+  const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
   const adaptive = isAdaptiveFreeride(workout);
 
   useEffect(() => {
@@ -264,9 +302,10 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
 
   // Wake Lock implementation
   const requestWakeLock = async () => {
-    if ("wakeLock" in navigator) {
+    const wakeNavigator = navigator as WakeLockCapableNavigator;
+    if (wakeNavigator.wakeLock) {
       try {
-        wakeLockRef.current = await (navigator as any).wakeLock.request("screen");
+        wakeLockRef.current = await wakeNavigator.wakeLock.request("screen");
         console.log("Wake Lock active");
       } catch (err) {
         console.error(`${(err as Error).name}, ${(err as Error).message}`);
@@ -566,6 +605,183 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
   };
 
   const totalDuration = workout.blocks.reduce((acc, b) => acc + b.durationSeconds, 0);
+
+  const buildTelemetrySnapshots = useCallback((): TelemetrySnapshot[] => {
+    const samples = telemetrySamplesRef.current;
+    if (samples.length === 0) return [];
+
+    const windowSeconds = 30;
+    const firstBucket = Math.floor(samples[0].elapsedSeconds / windowSeconds) * windowSeconds;
+    const lastBucket = Math.floor(samples[samples.length - 1].elapsedSeconds / windowSeconds) * windowSeconds;
+    const snapshots: TelemetrySnapshot[] = [];
+
+    for (let bucketStart = firstBucket; bucketStart <= lastBucket; bucketStart += windowSeconds) {
+      const bucketSamples = samples.filter(
+        (sample) =>
+          sample.elapsedSeconds >= bucketStart &&
+          sample.elapsedSeconds < bucketStart + windowSeconds
+      );
+      if (bucketSamples.length === 0) continue;
+
+      const lastSample = bucketSamples[bucketSamples.length - 1];
+      snapshots.push({
+        offsetSeconds: bucketStart,
+        durationSeconds: Math.min(windowSeconds, bucketSamples.length),
+        avgPowerW: averageNullable(bucketSamples.map((sample) => sample.power)),
+        avgCadenceRpm: averageNullable(bucketSamples.map((sample) => sample.cadence)),
+        avgHeartRateBpm: averageNullable(bucketSamples.map((sample) => sample.heartRate)),
+        targetPower: lastSample.targetPower,
+        hrZone: lastSample.hrZoneName,
+      });
+    }
+
+    return snapshots.slice(-20);
+  }, []);
+
+  const requestPeriodicCoachCheck = useCallback(async () => {
+    if (liveCoachRunningRef.current) return;
+    liveCoachRunningRef.current = true;
+    setLiveCoachStatus("checking");
+
+    try {
+      const remainingWorkout = getRemainingWorkoutSnapshot();
+      const telemetrySnapshots = buildTelemetrySnapshots();
+      const latestSnapshot = telemetrySamplesRef.current[telemetrySamplesRef.current.length - 1] ?? null;
+      const response = await fetch("/api/coach/live", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          intent: "periodic_ride_check",
+          snapshot: {
+            generatedAtIso: new Date().toISOString(),
+            workoutName: workout.name,
+            latestSample: latestSnapshot
+              ? {
+                  powerW: latestSnapshot.power,
+                  cadenceRpm: latestSnapshot.cadence,
+                  heartRateBpm: latestSnapshot.heartRate,
+                }
+              : null,
+            currentHrZone: currentHrZone
+              ? {
+                  id: currentHrZone.id,
+                  name: currentHrZone.name,
+                  minBpm: currentHrZone.minBpm,
+                  maxBpm: currentHrZone.maxBpm,
+                }
+              : null,
+            activeTrainerMode,
+            riderProfile: {
+              fourDP: riderProfile.fourDP,
+              cTHR: riderProfile.cTHR,
+              age: riderProfile.age,
+              weightKg: riderProfile.weightKg,
+              gender: riderProfile.gender,
+              hrZones: riderProfile.hrZones.map((zone) => ({
+                id: zone.id,
+                name: zone.name,
+                percentageRange: zone.percentageRange,
+                minBpm: zone.minBpm,
+                maxBpm: zone.maxBpm,
+              })),
+              memorySummary: riderProfile.memorySummary || null,
+            },
+            rolling: {
+              sampleWindowSeconds: 30,
+              snapshots: telemetrySnapshots,
+              rideSoFar: {
+                elapsedSeconds,
+                avgPowerW: averageNullable(telemetrySamplesRef.current.map((sample) => sample.power)),
+                avgCadenceRpm: averageNullable(telemetrySamplesRef.current.map((sample) => sample.cadence)),
+                avgHeartRateBpm: averageNullable(telemetrySamplesRef.current.map((sample) => sample.heartRate)),
+              },
+            },
+            remainingWorkout,
+          },
+        }),
+      });
+
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(data?.error || "Live coach check failed");
+      }
+
+      const text =
+        typeof data?.action?.text === "string" && data.action.text.trim()
+          ? data.action.text.trim()
+          : typeof data?.command?.text === "string" && data.command.text.trim()
+            ? data.command.text.trim()
+            : null;
+
+      if (text) setLiveCoachFeedback(text);
+      if (typeof data?.action?.reason === "string") {
+        setLiveCoachDetail(data.action.reason);
+      } else if (typeof data?.command?.reason === "string") {
+        setLiveCoachDetail(data.command.reason);
+      }
+      setLiveCoachStatus("idle");
+    } catch (err) {
+      console.error(err);
+      setLiveCoachStatus("error");
+      setLiveCoachDetail(err instanceof Error ? err.message : String(err));
+    } finally {
+      liveCoachRunningRef.current = false;
+    }
+  }, [
+    activeTrainerMode,
+    buildTelemetrySnapshots,
+    currentHrZone,
+    elapsedSeconds,
+    getRemainingWorkoutSnapshot,
+    riderProfile,
+    workout.name,
+  ]);
+
+  useEffect(() => {
+    if (!isPlaying || elapsedSeconds <= 0) return;
+
+    telemetrySamplesRef.current.push({
+      elapsedSeconds,
+      power,
+      cadence,
+      heartRate,
+      targetPower: getRemainingWorkoutSnapshot().currentTargetPower,
+      hrZoneName: currentHrZone?.name ?? null,
+    });
+    telemetrySamplesRef.current = telemetrySamplesRef.current.filter(
+      (sample) => elapsedSeconds - sample.elapsedSeconds <= 10 * 60
+    );
+
+    if (
+      elapsedSeconds >= 5 * 60 &&
+      elapsedSeconds % (5 * 60) === 0 &&
+      lastLiveCoachCheckSecondRef.current !== elapsedSeconds
+    ) {
+      lastLiveCoachCheckSecondRef.current = elapsedSeconds;
+      void requestPeriodicCoachCheck();
+    }
+  }, [
+    cadence,
+    currentHrZone,
+    elapsedSeconds,
+    getRemainingWorkoutSnapshot,
+    heartRate,
+    isPlaying,
+    power,
+    requestPeriodicCoachCheck,
+  ]);
+
+  useEffect(() => {
+    if (elapsedSeconds === 0) {
+      telemetrySamplesRef.current = [];
+      lastLiveCoachCheckSecondRef.current = 0;
+      liveCoachRunningRef.current = false;
+      setLiveCoachStatus("idle");
+      setLiveCoachFeedback(null);
+      setLiveCoachDetail(null);
+    }
+  }, [elapsedSeconds]);
+
   const renderBuilderDialogContent = () => (
     <DialogContent className="sm:max-w-xl rounded-md">
       <DialogHeader>
@@ -857,6 +1073,33 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
             {activeTrainerMode.type === "resistance" && <span className="text-primary">Resistance ({activeTrainerMode.level}%)</span>}
           </span>
         </div>
+        {(liveCoachFeedback || liveCoachStatus !== "idle") && (
+          <div className="border-t px-4 py-3">
+            <div className="mb-1 flex items-center justify-between gap-3">
+              <span className="text-xs font-semibold uppercase text-muted-foreground">
+                Ride Coach
+              </span>
+              {liveCoachStatus === "checking" && (
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-primary">
+                  Checking
+                </span>
+              )}
+              {liveCoachStatus === "error" && (
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-destructive">
+                  Offline
+                </span>
+              )}
+            </div>
+            {liveCoachFeedback && (
+              <p className="text-sm font-medium leading-relaxed">{liveCoachFeedback}</p>
+            )}
+            {liveCoachDetail && (
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                {liveCoachDetail}
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="flex items-center justify-between bg-muted/20 p-4 rounded-md border mt-2">
