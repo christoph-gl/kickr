@@ -946,7 +946,7 @@ export default function App() {
   };
 
   return (
-    <main className="flex min-h-svh p-6">
+    <main className="flex min-h-svh flex-col gap-6 p-6 lg:flex-row">
       {/* Left Column - Controls & Telemetry */}
       <div className="flex max-w-md min-w-0 flex-col gap-6 text-sm w-full">
         
@@ -1567,7 +1567,7 @@ export default function App() {
       </div>
 
       {/* Right Column - Workout Player */}
-      <div className="hidden lg:flex min-w-0 flex-col gap-6 w-full max-w-4xl">
+      <div className="flex min-w-0 w-full max-w-4xl flex-col gap-6">
         <WorkoutPlayer
            ref={workoutPlayerRef}
            disabled={connectionState !== "connected"}

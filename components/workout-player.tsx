@@ -93,6 +93,12 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
   const [isPickerOpen, setIsPickerOpen] = useState(false);
   const [isFinishOpen, setIsFinishOpen] = useState(false);
   const [finishComments, setFinishComments] = useState("");
+  const [isBuilderOpen, setIsBuilderOpen] = useState(false);
+  const [builderInstructions, setBuilderInstructions] = useState("");
+  const [builderRationale, setBuilderRationale] = useState<string | null>(null);
+  const [isBuildingWorkout, setIsBuildingWorkout] = useState(false);
+  const [unsavedBuiltWorkoutId, setUnsavedBuiltWorkoutId] = useState<string | null>(null);
+  const [isSavingBuiltWorkout, setIsSavingBuiltWorkout] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [upcomingChange, setUpcomingChange] = useState<{ nextTarget: number, currentTarget: number, seconds: number } | null>(null);
   const lastTargetRef = useRef<number | null>(null);
@@ -446,6 +452,8 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
       await saveWorkout(parsedWorkout);
       setAllWorkouts(prev => [...prev, parsedWorkout]);
       setWorkout(parsedWorkout);
+      setUnsavedBuiltWorkoutId(null);
+      setBuilderRationale(null);
       handleStop();
     } catch (err) {
       console.error(err);
@@ -467,12 +475,67 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
       await saveWorkout(parsedWorkout);
       setAllWorkouts(prev => [...prev, parsedWorkout]);
       setWorkout(parsedWorkout);
+      setUnsavedBuiltWorkoutId(null);
+      setBuilderRationale(null);
       handleStop();
     } catch (err) {
       console.error(err);
       alert(err instanceof Error ? err.message : "Failed to parse ZWO file");
     } finally {
       if (zwoFileInputRef.current) zwoFileInputRef.current.value = "";
+    }
+  };
+
+  const handleBuildWorkout = async () => {
+    const instructions = builderInstructions.trim();
+    if (!instructions || isBuildingWorkout) return;
+
+    setIsBuildingWorkout(true);
+    setBuilderRationale(null);
+    try {
+      const res = await fetch("/api/workout-builder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ instructions }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to build workout");
+      }
+
+      const generatedWorkout = data.workout as Workout;
+      setWorkout(generatedWorkout);
+      setBuilderRationale(typeof data.rationale === "string" ? data.rationale : null);
+      setUnsavedBuiltWorkoutId(generatedWorkout.id);
+      setBuilderInstructions("");
+      setIsBuilderOpen(false);
+      setIsPickerOpen(false);
+      handleStop();
+    } catch (err) {
+      console.error(err);
+      alert(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsBuildingWorkout(false);
+    }
+  };
+
+  const handleSaveBuiltWorkout = async () => {
+    if (!unsavedBuiltWorkoutId || workout.id !== unsavedBuiltWorkoutId || isSavingBuiltWorkout) return;
+
+    setIsSavingBuiltWorkout(true);
+    try {
+      await saveWorkout(workout);
+      setAllWorkouts((prev) =>
+        prev.some((savedWorkout) => savedWorkout.id === workout.id)
+          ? prev
+          : [...prev, workout]
+      );
+      setUnsavedBuiltWorkoutId(null);
+    } catch (err) {
+      console.error(err);
+      alert(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsSavingBuiltWorkout(false);
     }
   };
 
@@ -503,6 +566,37 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
   };
 
   const totalDuration = workout.blocks.reduce((acc, b) => acc + b.durationSeconds, 0);
+  const renderBuilderDialogContent = () => (
+    <DialogContent className="sm:max-w-xl rounded-md">
+      <DialogHeader>
+        <DialogTitle>Build Ride</DialogTitle>
+        <DialogDescription>
+          Describe today&apos;s workout target.
+        </DialogDescription>
+      </DialogHeader>
+      <textarea
+        value={builderInstructions}
+        onChange={(event) => setBuilderInstructions(event.target.value)}
+        placeholder="Example: 45 minutes endurance, mostly Z2, keep it gentle because HR ran high last ride."
+        className="min-h-32 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      />
+      <DialogFooter>
+        <Button
+          variant="outline"
+          onClick={() => setIsBuilderOpen(false)}
+          disabled={isBuildingWorkout}
+        >
+          Cancel
+        </Button>
+        <Button
+          onClick={handleBuildWorkout}
+          disabled={!builderInstructions.trim() || isBuildingWorkout}
+        >
+          {isBuildingWorkout ? "Building..." : "Build & Load"}
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  );
 
   return (
     <div className="flex flex-col gap-4">
@@ -538,6 +632,8 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
             size="sm"
             onClick={() => {
               setWorkout(ADAPTIVE_FREERIDE);
+              setUnsavedBuiltWorkoutId(null);
+              setBuilderRationale(null);
               handleStop();
             }}
             disabled={isPlaying}
@@ -545,6 +641,18 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
           >
             {adaptive ? "Adaptive Loaded" : "Adaptive Freeride"}
           </Button>
+          <Dialog open={isBuilderOpen} onOpenChange={setIsBuilderOpen}>
+            <DialogTrigger asChild>
+              <Button
+                variant="default"
+                size="sm"
+                disabled={isPlaying || isUploading || isBuildingWorkout}
+              >
+                Build Ride
+              </Button>
+            </DialogTrigger>
+            {renderBuilderDialogContent()}
+          </Dialog>
           <Dialog open={isPickerOpen} onOpenChange={setIsPickerOpen}>
             <DialogTrigger asChild>
               <Button variant="outline" size="sm">Change Workout</Button>
@@ -605,6 +713,8 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
                       }`}
                       onClick={() => {
                         setWorkout(w);
+                        setUnsavedBuiltWorkoutId(null);
+                        setBuilderRationale(null);
                         handleStop();
                         setIsPickerOpen(false);
                       }}
@@ -646,6 +756,34 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
       </div>
 
       <WorkoutChart workout={workout} progressSeconds={elapsedSeconds} onSeek={handleSeek} riderProfile={riderProfile} />
+
+      {builderRationale && (
+        <div className="flex flex-col gap-3 rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="mb-1 font-bold uppercase tracking-wider text-foreground">
+                Builder Rationale
+              </div>
+              {builderRationale}
+            </div>
+            {unsavedBuiltWorkoutId === workout.id && (
+              <Button
+                size="sm"
+                onClick={handleSaveBuiltWorkout}
+                disabled={isSavingBuiltWorkout}
+                className="shrink-0"
+              >
+                {isSavingBuiltWorkout ? "Saving..." : "Save Track"}
+              </Button>
+            )}
+          </div>
+          {unsavedBuiltWorkoutId === workout.id && (
+            <p className="text-[10px] text-muted-foreground">
+              This AI-built ride is loaded as a draft. Save it to keep it in Change Workout.
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Telemetry Card - Integrated into Player */}
       <div className="flex flex-col rounded-md border bg-muted/20 overflow-hidden">
