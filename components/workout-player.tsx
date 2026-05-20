@@ -140,6 +140,7 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
     hrZoneName: string | null;
   }>>([]);
   const liveCoachRunningRef = useRef(false);
+  const initialLiveCoachRequestedRef = useRef(false);
   const lastLiveCoachCheckSecondRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const zwoFileInputRef = useRef<HTMLInputElement>(null);
@@ -638,7 +639,7 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
     return snapshots.slice(-20);
   }, []);
 
-  const requestPeriodicCoachCheck = useCallback(async () => {
+  const requestLiveCoachCheck = useCallback(async (intent: "ride_start_summary" | "periodic_ride_check") => {
     if (liveCoachRunningRef.current) return;
     liveCoachRunningRef.current = true;
     setLiveCoachStatus("checking");
@@ -651,7 +652,7 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          intent: "periodic_ride_check",
+          intent,
           snapshot: {
             generatedAtIso: new Date().toISOString(),
             workoutName: workout.name,
@@ -713,7 +714,10 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
             ? data.command.text.trim()
             : null;
 
-      if (text) setLiveCoachFeedback(text);
+      if (text) {
+        setLiveCoachFeedback(text);
+        audioService.playCoachMessage();
+      }
       if (typeof data?.action?.reason === "string") {
         setLiveCoachDetail(data.action.reason);
       } else if (typeof data?.command?.reason === "string") {
@@ -738,7 +742,15 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
   ]);
 
   useEffect(() => {
-    if (!isPlaying || elapsedSeconds <= 0) return;
+    if (!isPlaying) return;
+
+    if (elapsedSeconds === 0 && !initialLiveCoachRequestedRef.current) {
+      initialLiveCoachRequestedRef.current = true;
+      void requestLiveCoachCheck("ride_start_summary");
+      return;
+    }
+
+    if (elapsedSeconds <= 0) return;
 
     telemetrySamplesRef.current.push({
       elapsedSeconds,
@@ -758,7 +770,7 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
       lastLiveCoachCheckSecondRef.current !== elapsedSeconds
     ) {
       lastLiveCoachCheckSecondRef.current = elapsedSeconds;
-      void requestPeriodicCoachCheck();
+      void requestLiveCoachCheck("periodic_ride_check");
     }
   }, [
     cadence,
@@ -768,12 +780,13 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
     heartRate,
     isPlaying,
     power,
-    requestPeriodicCoachCheck,
+    requestLiveCoachCheck,
   ]);
 
   useEffect(() => {
     if (elapsedSeconds === 0) {
       telemetrySamplesRef.current = [];
+      initialLiveCoachRequestedRef.current = false;
       lastLiveCoachCheckSecondRef.current = 0;
       liveCoachRunningRef.current = false;
       setLiveCoachStatus("idle");

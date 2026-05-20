@@ -243,6 +243,8 @@ For external-agent coaching:
 
 For active in-ride UI coaching, the KICKR app now owns the fast path through `POST /api/coach/live`. Hermes/OpenClaw are better for pre-ride planning, route/workout generation, post-ride summaries, and rider profile or memory updates.
 
+Current app behavior: during preplanned workouts, the in-app live lane sends a `ride_start_summary` at Play from `0:00`, then `periodic_ride_check` every five minutes. These are feedback-only; the model should return rider-facing text and should not adapt ERG watts or rewrite the workout.
+
 ## Hook Direction
 
 Use both directions clearly:

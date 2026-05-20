@@ -32,6 +32,7 @@ Fresh-agent default path:
   - **ZWO Files:** Parse and load industry-standard Zwift XML workout files directly in the browser.
   - **AI Image Import:** Upload a screenshot of a 4DP® or ERG workout chart, and an image-capable AI model will extract the structure and translate it into a playable workout scaled to your profile.
 - **AI Workout Builder:** Describe today’s ride in natural language, such as “45 minutes endurance, keep HR down,” and the app builds an ERG workout from the rider profile plus the last five ride summaries. Generated rides load as drafts first; use **Save Track** to make a good one permanent in the workout picker.
+- **In-Ride LLM Feedback:** When a preplanned workout starts, the app asks the LLM for a short ride-start summary. Every five minutes during the ride it sends compact 30-second telemetry snapshots plus the remaining workout and shows feedback below the Power/Cadence/HR card. For preplanned workouts this lane is feedback-only; it does not change ERG watts or rewrite the plan.
 - **Post-Ride LLM Summaries:** On **Finish & Save**, add rider comments. The server computes a compact ride-analysis payload, asks an LLM for a structured summary, and stores that summary with the session in SQLite.
 - **Rider Profile Management:** Configure and store your Neuromuscular Power (NM), Anaerobic Capacity (AC), Maximal Aerobic Power (MAP), Functional Threshold Power (FTP), and Cycling Threshold Heart Rate (cTHR) zones.
 - **Data Export:** Download a `.csv` record of your ride telemetry containing timestamps, power, cadence, speed, heart rate, and resistance level.
@@ -109,6 +110,8 @@ Fresh-agent default path:
 
 > **Note:** Web Bluetooth requires a secure context (HTTPS) or `localhost`. It is currently fully supported in **Chrome** and **Edge**. Ensure no other apps (like Zwift or Wahoo app) are actively connected to your trainer, as they typically only accept one active Bluetooth control connection at a time.
 >
+> Bluetooth discovery is intentionally service-filtered. The trainer picker filters for FTMS (`0x1826`), and the HRM picker filters for Heart Rate (`0x180d`) so the browser chooser does not list unrelated nearby devices.
+>
 > Portless command note: use `npm run dev:portless`, `npx portless`, or `npx portless run next dev --turbopack`. Do not use `portless run dev`; that tries to execute a shell command named `dev` instead of the npm script.
 
 ## Technology Stack
@@ -140,6 +143,16 @@ curl -k -X POST https://kickr.localhost/api/workout-builder \
 ```
 
 If you are not using Portless, replace `https://kickr.localhost` with `http://localhost:3000`.
+
+## In-Ride LLM Feedback
+
+The workout player uses `POST /api/coach/live` for app-owned, low-latency feedback during structured workouts:
+
+- **At ride start:** when the rider presses Play at `0:00`, the browser sends `intent: "ride_start_summary"`. The payload includes the rider profile and the remaining workout blocks. The model returns a short `send_message` that summarizes the planned ride and gives one focus cue.
+- **Every five minutes:** while the workout is playing, the browser sends `intent: "periodic_ride_check"`. The payload includes the rider profile, HR zones, active mode, the latest sample, ride-so-far averages, rolling 30-second snapshots from the last 10 minutes, and the remaining workout blocks.
+- **Feedback-only for preplanned workouts:** the prompt tells the model to return `send_message` only for these two intents, and the client does not apply trainer or workout commands from periodic checks. Planned ERG targets remain owned by the workout timeline.
+
+The feedback is rendered below the Power/Cadence/HR card. `LIVE_COACH_TIMEOUT_MS` defaults to 8000 ms; on timeout the ride keeps running and the coach panel shows an offline/detail message instead of blocking trainer control.
 
 ## Post-Ride LLM Summaries
 
@@ -221,9 +234,9 @@ Prompt guardrails:
 
 ## Local Agent Bridge
 
-The browser remains the Bluetooth owner. A local agent such as OpenClaw or Hermes should enqueue high-level commands through the Next.js server; the browser tab with the active trainer connection polls the command inbox and applies commands through the existing Web Bluetooth client.
+The browser remains the Bluetooth owner. The older local agent command endpoints still exist server-side for compatibility and experiments, but the current UI no longer shows the Agent Controller card or polls `/api/agent/commands` during normal operation. App-owned LLM lanes now handle workout building, in-ride feedback, and post-ride summaries directly.
 
-The app polls `GET /api/agent/commands` every 3 seconds only while the tab is connected to the trainer, so repeated request lines in dev logs are normal during an active connection. Disconnected or stale tabs should not consume trainer commands.
+A local agent such as OpenClaw or Hermes can still enqueue high-level commands through the Next.js server if a future client surface consumes them, or for API smoke tests. Do not treat these routes as the active in-ride coaching path for this UI.
 
 Queue an ERG command:
 
@@ -249,8 +262,6 @@ Supported command types:
 
 Use `set_erg_watts` as the canonical ERG command. The browser also accepts `{"type":"set_trainer_mode","mode":"erg","targetWatts":220}` as a compatibility fallback for agents that already emit that shape, but fresh integrations should prefer `set_erg_watts`.
 
-`request_rider_voice_feedback` opens a visible 10-second browser mic window in Chrome/Edge. For the in-app live coach lane, the browser records audio and sends it directly to the multimodal model instead of sending a speech transcript.
-
 Read recent agent/ride events:
 
 ```bash
@@ -269,11 +280,11 @@ Read saved sessions:
 curl https://kickr.localhost/api/sessions
 ```
 
-For the later OpenClaw/Hermes step, point the local agent at this command endpoint and read live ride context from `GET /api/agent/events?limit=200`, rider context from `GET /api/rider`, and history from `GET /api/sessions`. If you set `AGENT_COMMAND_TOKEN`, external callers must include `Authorization: Bearer <token>`.
+For later OpenClaw/Hermes work, prefer using rider context from `GET /api/rider`, history from `GET /api/sessions`, and app-owned feature routes where available. If you set `AGENT_COMMAND_TOKEN`, external callers to command routes must include `Authorization: Bearer <token>`.
 
 The agent should send structured intent such as “set ERG to 240 W,” not FTMS bytes. FTMS encoding stays inside `lib/kickr-client.ts`.
 
-When testing trainer commands, confirm both `command_applied` and a following `ride_snapshot.activeTrainerMode` change. If a command is consumed by a stale tab, the event log will show a different session id or a `command_failed` event such as `Not connected`.
+When experimenting with trainer commands, confirm there is an active client surface consuming them before expecting trainer-side effects.
 
 ## SQLite Persistence
 
@@ -295,9 +306,7 @@ Use the cog button in the top right of the app to edit these values manually.
 
 ## Local Agent Architecture
 
-The browser owns Bluetooth. Time-sensitive in-ride coaching uses the app-owned `POST /api/coach/live` endpoint, which calls a fast AI SDK model directly and returns one structured command for the browser to apply immediately. Use this for manual coach checks, rider voice feedback, and Adaptive Freeride plan refreshes. Rider voice feedback is recorded with `MediaRecorder` and sent as audio to the multimodal model; the browser does not send a speech transcript.
-
-When the live coach changes ERG watts during an active workout, the workout track is updated visually from the current elapsed second until the next planned step. The later planned workout structure remains intact.
+The browser owns Bluetooth. Time-sensitive in-ride feedback uses the app-owned `POST /api/coach/live` endpoint, which calls a fast AI SDK model directly. For preplanned workouts, the active UI uses this route only for rider-facing text: one ride-start summary and five-minute feedback checks. The workout timeline remains the source of truth for ERG targets.
 
 External agents (Hermes, OpenClaw, ...) remain useful for slower work: pre-ride route/workout planning, creating workouts from scratch, end-of-ride ingestion, and adapting rider memory or profile data. They operate through local HTTP and never speak FTMS or talk to the trainer directly. Two directions:
 
@@ -311,7 +320,7 @@ The hook payload includes a compact `runtimeContract` and ride snapshot so an ex
 
 The hook trigger response confirms forwarding only: target backend, local target URL, HTTP status, and any response body/run id returned by Hermes/OpenClaw. Actual agent processing is confirmed later when the agent queues a `send_message`, trainer command, or event through the KICKR APIs.
 
-Initial wake events are intentionally minimal: `ride_started`, `ride_ended`, `rider_feedback`, and manual `coach_check`. Prefer `/api/coach/live` for active-ride feedback and coach checks; use wake events for asynchronous agent workflows. Physiological triggers (high HR, cadence collapse) are later work.
+Initial wake events are intentionally minimal: `ride_started`, `ride_ended`, `rider_feedback`, and manual `coach_check`. Prefer `/api/coach/live` for active-ride feedback; use wake events for asynchronous agent workflows. Physiological triggers (high HR, cadence collapse) are later work.
 
 ### Install-once skill model
 

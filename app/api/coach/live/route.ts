@@ -348,7 +348,9 @@ export async function POST(request: Request) {
 
   const snapshot = body?.snapshot ?? null;
   const intent =
-    body?.intent === "adaptive_plan" || body?.intent === "periodic_ride_check"
+    body?.intent === "adaptive_plan" ||
+    body?.intent === "periodic_ride_check" ||
+    body?.intent === "ride_start_summary"
       ? body.intent
       : "coach_check";
   const riderText = typeof body?.riderText === "string" ? body.riderText : "";
@@ -446,6 +448,7 @@ Available executable actions:
 - send_message: rider-facing text only; it does not change trainer load.
 Do not use send_message when the rider clearly asks to change watts or resistance and the snapshot says the trainer is connected.
 For coach_check without a specific rider request, prefer a short rider-facing cue under 12 words unless telemetry clearly calls for ERG or resistance adjustment.
+For ride_start_summary during a preplanned workout, return send_message only. Summarize the course the rider is starting: duration, target-power pattern, likely purpose, and one simple focus cue. Keep it under 35 words. Do not return set_workout_plan, set_erg_watts, or set_resistance for ride_start_summary.
 For periodic_ride_check during a preplanned workout, return send_message only. Use the rider profile, heart-rate zones, 30-second rolling snapshots, and remainingWorkout to give one short motivating cue under 18 words. Do not return set_workout_plan, set_erg_watts, or set_resistance for periodic_ride_check.
 When rider text is included, treat it as the latest chat message from the rider.
 Use set_workout_plan for requests that mention the workout, track, plan, remaining work, rest of workout, next N minutes, compressing duration, stretching duration, or scaling effort over time.

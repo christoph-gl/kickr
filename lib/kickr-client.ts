@@ -30,8 +30,7 @@ export class KickrCore2Client {
     }
 
     this.device = await navigator.bluetooth.requestDevice({
-      acceptAllDevices: true,
-      optionalServices: [FTMS_SERVICE],
+      filters: [{ services: [FTMS_SERVICE] }],
     });
 
     this.device.addEventListener("gattserverdisconnected", () => {

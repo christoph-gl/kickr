@@ -21,7 +21,9 @@ curl -X POST "$BASE_URL/api/agent/commands" \
   -d '{"type":"send_message","text":"KICKR agent bridge connected","reason":"integration smoke test"}'
 ```
 
-If a browser tab is connected to the trainer, the message should appear in the app's Agent Controller panel. If no tab is connected, the command remains queued until a connected tab consumes it.
+Current app note: the Agent Controller panel has been removed. A queued message
+appears in the UI only if the running app version has an active command-consuming
+surface.
 
 ## Rider Context
 
@@ -96,9 +98,10 @@ GET /api/agent/commands
 GET /api/agent/commands?consume=false
 ```
 
-The browser tab polls `GET /api/agent/commands` every 3 seconds and applies queued commands. This is expected behavior during an active trainer connection.
-
-Only the browser tab with `connectionState: "connected"` should consume commands. Disconnected or stale tabs should not poll the consuming endpoint, because they do not own a live Bluetooth control characteristic.
+The Agent Controller card and normal command polling UI have been removed.
+These endpoints still exist server-side for compatibility and experiments, but
+fresh integrations should not assume trainer commands will be consumed unless a
+client surface for command polling is explicitly present.
 
 Supported commands:
 
@@ -113,9 +116,9 @@ Supported commands:
 {"type":"set_workout_plan","horizonSeconds":600,"leadSeconds":20,"blocks":[{"durationSeconds":300,"targetPower":180},{"durationSeconds":300,"targetPower":190}],"reason":"Adaptive freeride refresh"}
 ```
 
-Use `send_message`, `set_erg_watts`, and `set_resistance` for the first integration. Treat `start_trainer` and `stop_trainer` as lower-level trainer commands, not workout-player controls. Use `set_workout_plan` only for adaptive freeride or explicitly planned agent workouts; the browser workout player applies it when connected.
+Use `send_message`, `set_erg_watts`, and `set_resistance` for command-shape compatibility. Treat `start_trainer` and `stop_trainer` as lower-level trainer commands, not workout-player controls. Use `set_workout_plan` only when a current client surface explicitly consumes it.
 
-Use `request_rider_voice_feedback` sparingly when a short spoken rider answer is useful. The app opens a visible 10-second browser Web Speech recognition window and forwards the transcript as a `rider_feedback` hook.
+Use `request_rider_voice_feedback` only if the active UI implements it. The current app-owned preplanned-workout coach lane is text feedback only.
 
 Use the exact command names above. The app accepts these compatibility fallbacks, but fresh agents should queue the canonical commands so behavior stays predictable:
 

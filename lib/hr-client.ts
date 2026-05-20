@@ -16,8 +16,7 @@ export class HeartRateClient {
     }
 
     this.device = await navigator.bluetooth.requestDevice({
-      acceptAllDevices: true,
-      optionalServices: [HEART_RATE_SERVICE],
+      filters: [{ services: [HEART_RATE_SERVICE] }],
     });
 
     this.device.addEventListener("gattserverdisconnected", () => {

@@ -82,7 +82,7 @@ On wake (non-adaptive events):
 3. Decide: send one message, queue one trainer command, request rider voice feedback, or do nothing.
 4. Keep responses short during a ride.
 
-Fast coach checks should usually queue one `send_message` under 12 words. Use `runtimeContract.commandEndpoint` for commands. If OpenClaw's hook mapping only gives you the rendered message, follow the callback URL embedded in that message; plain final answers do not reach the KICKR UI. The KICKR app's active-ride UI now prefers its direct `/api/coach/live` lane for low-latency checks, so OpenClaw wakeups are mainly for compatibility and deeper asynchronous work.
+Fast coach checks should usually queue one `send_message` under 12 words. Use `runtimeContract.commandEndpoint` only when the running app version has an active command-consuming UI. If OpenClaw's hook mapping only gives you the rendered message, follow the callback URL embedded in that message; plain final answers do not reach the KICKR UI. The current KICKR app's preplanned-workout lane uses direct `/api/coach/live` calls for a ride-start summary and five-minute feedback-only checks, so OpenClaw wakeups are mainly for compatibility and deeper asynchronous work.
 
 ### `plan_refresh` (Adaptive Freeride)
 

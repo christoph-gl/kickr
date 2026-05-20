@@ -8,7 +8,9 @@ class AudioService {
     
     // Initialize AudioContext if not exists (must be called from user gesture)
     if (!this.ctx) {
-      const AudioContextClass = (window as any).AudioContext || (window as any).webkitAudioContext;
+      const AudioContextClass =
+        window.AudioContext ||
+        (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
       if (AudioContextClass) {
         this.ctx = new AudioContextClass();
       }
@@ -24,6 +26,7 @@ class AudioService {
       try {
         await Promise.all([
           this.loadBuffer('notification', '/notification.mp3'),
+          this.loadBuffer('coachMessage', '/coach-message.mp3'),
           this.loadBuffer('accelerate', '/accelerate.mp3'),
           this.loadBuffer('brake', '/brake.mp3')
         ]);
@@ -67,6 +70,10 @@ class AudioService {
 
   playNotification() {
     this.playBuffer('notification');
+  }
+
+  playCoachMessage() {
+    this.playBuffer('coachMessage');
   }
 
   playAcceleration() {

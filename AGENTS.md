@@ -43,6 +43,7 @@ Communication relies heavily on the **Web Bluetooth API** (`navigator.bluetooth`
    - Bluetooth connection requests MUST be triggered by user interactions (e.g. `onClick` of a button).
    - Web Bluetooth requires HTTPS or `localhost` (secure context) to function.
    - Disconnect handling is crucial (`gattserverdisconnected` events) for multiple parallel connections.
+   - Device discovery should stay service-filtered: KICKR/trainer uses FTMS (`filters: [{ services: [0x1826] }]`), HRM uses Heart Rate (`filters: [{ services: [0x180d] }]`). Do not return to broad `acceptAllDevices: true` unless the user explicitly wants a troubleshooting mode.
 2. **FTMS Specifics:**
    - **ERG Mode (Target Power):** Uses Opcode `0x05`. Sends watts as `int16`. Trainer auto-adjusts resistance based on cadence.
    - **Resistance Mode:** Uses Opcode `0x04`. Sends percentage as `int16`. Note: While the FTMS spec defines a resolution of `0.1` (so 100% = 1000), Wahoo trainers deviate from the spec and expect a direct `0-100` scale (100% = 100).
@@ -61,10 +62,11 @@ Communication relies heavily on the **Web Bluetooth API** (`navigator.bluetooth`
    - The app can extract workouts from screenshots using the **Vercel AI SDK** and an image-capable multimodal model. The backend endpoint (`/api/extract-workout/route.ts`) expects `WORKOUT_IMAGE_EXTRACTOR_API_KEY` and `WORKOUT_IMAGE_EXTRACTOR_MODEL` in `.env.local` for screenshot imports only. It still accepts `AI_GATEWAY_API_KEY` and `AI_GATEWAY_MODEL` as compatibility fallbacks.
    - All other in-app LLM lanes share `LLM_CALLS_API_KEY` / `LLM_CALLS_MODEL` via `lib/llm-calls-env.ts`, with optional per-lane overrides and `AI_GATEWAY_*` as a legacy fallback.
 6. **Live In-Ride LLM Lane:**
-   - During rides, avoid the Hermes/OpenClaw wakeup -> callback -> command polling path for time-sensitive coaching. Use `POST /api/coach/live`, which calls a fast AI SDK model directly and returns one structured `AgentCommand` for the browser to apply immediately.
-   - Configure `LIVE_COACH_API_KEY` and `LIVE_COACH_MODEL` for this lane, or rely on shared `LLM_CALLS_API_KEY` / `LLM_CALLS_MODEL` (then `AI_GATEWAY_*` as a legacy fallback). Do not use `WORKOUT_IMAGE_EXTRACTOR_*` for live coach. `LIVE_COACH_TIMEOUT_MS` defaults to 3500 so a slow provider does not stall the ride UI indefinitely.
-   - Manual coach checks, rider voice feedback, and Adaptive Freeride plan refreshes should use this live lane. Rider voice feedback is sent as recorded audio to the multimodal model, not as a browser speech transcript. External agents are better suited for pre-ride planning, route/workout creation, post-ride summaries, and rider-profile/memory updates.
-   - When the live coach returns an ERG watt change during a playing workout, the UI track should reflect that change from the current elapsed second until the next existing workout step. Later planned steps should remain intact.
+   - During rides, avoid the Hermes/OpenClaw wakeup -> callback -> command polling path for time-sensitive UI feedback. Use `POST /api/coach/live`, which calls a fast AI SDK model directly.
+   - Configure `LIVE_COACH_API_KEY` and `LIVE_COACH_MODEL` for this lane, or rely on shared `LLM_CALLS_API_KEY` / `LLM_CALLS_MODEL` (then `AI_GATEWAY_*` as a legacy fallback). Do not use `WORKOUT_IMAGE_EXTRACTOR_*` for live coach. `LIVE_COACH_TIMEOUT_MS` defaults to 8000 so a slow provider does not stall the ride UI indefinitely.
+   - For preplanned workouts, the current UI uses this lane as feedback-only. At Play from `0:00`, it sends `intent: "ride_start_summary"` with rider profile, HR zones, and remaining workout blocks. Every five minutes while playing, it sends `intent: "periodic_ride_check"` with rider profile, HR zones, latest sample, ride-so-far averages, 30-second telemetry snapshots, and the remaining workout.
+   - For `ride_start_summary` and `periodic_ride_check`, the model is instructed to return `send_message` only, and the client does not apply trainer/workout commands from these periodic checks. Preplanned workout ERG targets remain owned by the workout timeline.
+   - External agents are better suited for pre-ride planning, route/workout creation, post-ride summaries, and rider-profile/memory updates.
 7. **Workout Builder and Post-Ride Summary LLM Lanes:**
    - `POST /api/workout-builder` creates an ERG workout from rider instructions, current Europe/Berlin date/time, the SQLite rider profile, and the last five saved ride summaries. It returns a draft workout and rationale; it must not persist the workout automatically. The browser shows **Save Track** for drafts the rider wants to keep permanently in `workouts/`.
    - Configure `WORKOUT_BUILDER_API_KEY` / `WORKOUT_BUILDER_MODEL` for this lane. It falls back through `RIDE_SUMMARY_API_KEY`, `LIVE_COACH_API_KEY`, `LLM_CALLS_API_KEY`, and `AI_GATEWAY_API_KEY`.
@@ -99,9 +101,8 @@ When the app is started with Portless, prefer the stable project URL `https://ki
 ### Browser Ownership
 - The browser tab owns Web Bluetooth and sends FTMS commands.
 - External agents should not attempt to talk directly to the trainer.
-- Agent control is applied by polling `/api/agent/commands` from the browser and then calling existing KICKR client methods.
-- Polling currently happens every 3 seconds only from a tab whose trainer connection state is `connected`. Repeated `GET /api/agent/commands` lines in dev logs are expected during an active connection.
-- Disconnected or stale browser tabs must not consume trainer commands. If command execution looks wrong, compare `command_received` / `command_applied` / `command_failed` session ids with the latest `ride_snapshot.sessionId`.
+- The older `/api/agent/commands` and `/api/agent/events` routes still exist server-side, but the current UI no longer shows the Agent Controller card or polls the command inbox during normal operation.
+- Do not document or build new behavior assuming a browser tab consumes `/api/agent/commands` unless you also add an explicit client surface for it.
 
 ### Agent Command Endpoint
 - `POST /api/agent/commands` queues commands.
@@ -135,7 +136,7 @@ Use `set_erg_watts` and `set_resistance` as the canonical trainer-control comman
 - `PUT /api/rider` updates the rider profile.
 
 ### Live Coaching vs Outbound Agent Wakeups
-- Use `POST /api/coach/live` for in-ride, latency-sensitive decisions. It returns at most one structured command such as `send_message`, `set_erg_watts`, `set_resistance`, `request_rider_voice_feedback`, or `set_workout_plan`.
+- Use `POST /api/coach/live` for in-ride, latency-sensitive app feedback. For preplanned workouts, `ride_start_summary` and `periodic_ride_check` are text-only and must not adapt the workout or trainer load.
 - Keep Hermes/OpenClaw for deeper asynchronous work: initial route/workout planning, creating a workout from scratch, end-of-ride ingestion, and rider profile/memory adaptation.
 
 ### Outbound Agent Wakeups
