@@ -31,6 +31,8 @@ Fresh-agent default path:
 - **Workout Imports:**
   - **ZWO Files:** Parse and load industry-standard Zwift XML workout files directly in the browser.
   - **AI Image Import:** Upload a screenshot of a 4DP® or ERG workout chart, and an image-capable AI model will extract the structure and translate it into a playable workout scaled to your profile.
+- **AI Workout Builder:** Describe today’s ride in natural language, such as “45 minutes endurance, keep HR down,” and the app builds an ERG workout from the rider profile plus the last five ride summaries. Generated rides load as drafts first; use **Save Track** to make a good one permanent in the workout picker.
+- **Post-Ride LLM Summaries:** On **Finish & Save**, add rider comments. The server computes a compact ride-analysis payload, asks an LLM for a structured summary, and stores that summary with the session in SQLite.
 - **Rider Profile Management:** Configure and store your Neuromuscular Power (NM), Anaerobic Capacity (AC), Maximal Aerobic Power (MAP), Functional Threshold Power (FTP), and Cycling Threshold Heart Rate (cTHR) zones.
 - **Data Export:** Download a `.csv` record of your ride telemetry containing timestamps, power, cadence, speed, heart rate, and resistance level.
 - **Local Agent Control Bridge:** Queue local agent commands through `/api/agent/commands`, apply them in the browser-owned Bluetooth session, and persist ride snapshots plus command outcomes to SQLite.
@@ -50,11 +52,17 @@ Fresh-agent default path:
    LIVE_COACH_MODEL=google/gemini-3-flash
    LIVE_COACH_TIMEOUT_MS=3500
 
+   WORKOUT_BUILDER_API_KEY=your_workout_builder_llm_api_key_here
+   WORKOUT_BUILDER_MODEL=google/gemini-3-flash
+
+   RIDE_SUMMARY_API_KEY=your_post_ride_summary_llm_api_key_here
+   RIDE_SUMMARY_MODEL=google/gemini-3-flash
+
    WORKOUT_IMAGE_EXTRACTOR_API_KEY=your_image_capable_ai_api_key_here
    WORKOUT_IMAGE_EXTRACTOR_MODEL=google/gemini-3-flash
    ```
 
-   Plain trainer control, workout playback, and local agent commands work without these values. Live coach checks and Adaptive Freeride plan refreshes need `LIVE_COACH_API_KEY` or the compatibility fallback `AI_GATEWAY_API_KEY`. The app still accepts the older `AI_GATEWAY_API_KEY` / `AI_GATEWAY_MODEL` names as a compatibility fallback.
+   Plain trainer control, workout playback, and local agent commands work without these values. Live coach checks and Adaptive Freeride plan refreshes need `LIVE_COACH_API_KEY` or the compatibility fallback `AI_GATEWAY_API_KEY`. The workout builder can use `WORKOUT_BUILDER_API_KEY`, then falls back through `RIDE_SUMMARY_API_KEY`, `LIVE_COACH_API_KEY`, `WORKOUT_IMAGE_EXTRACTOR_API_KEY`, and `AI_GATEWAY_API_KEY`. Post-ride summaries can use `RIDE_SUMMARY_API_KEY`, then fall back through `LIVE_COACH_API_KEY`, `WORKOUT_IMAGE_EXTRACTOR_API_KEY`, and `AI_GATEWAY_API_KEY`. The app still accepts the older `AI_GATEWAY_API_KEY` / `AI_GATEWAY_MODEL` names as a compatibility fallback.
 
    Do not create `.env.local` by blindly copying `.env.example`; leave optional placeholders unset unless you have real values.
 
@@ -115,9 +123,108 @@ Fresh-agent default path:
 - React
 - TypeScript
 - Web Bluetooth API (FTMS protocol for trainer, standard HRM protocol for heart rate)
-- Vercel AI SDK (`ai` and `zod`) for image-to-workout extraction
+- Vercel AI SDK (`ai` and `zod`) for image-to-workout extraction, workout building, live coaching, and structured ride summaries
 - Tailwind CSS
 - shadcn/ui components
+
+## AI Workout Builder
+
+The **Build Ride** button in the Workout Player sends natural-language ride instructions to `POST /api/workout-builder`. The server builds the prompt from:
+
+- the current date/time in Europe/Berlin and ISO form
+- the rider request text
+- the SQLite-backed rider profile: 4DP values, cTHR, age, weight, gender, HR zones, and memory summary
+- the last five saved rides, including date, metrics, rider comments, and any LLM-generated ride evaluation
+
+The model returns structured ERG blocks (`durationSeconds`, `targetPower`, and an internal purpose). The route clamps block duration and target watts, calculates planned NP/IF/TSS, and returns the workout to the browser. It does **not** save generated workouts automatically. The browser loads the generated ride as a draft and shows **Save Track** in the builder-rationale panel; clicking it persists the workout JSON through `POST /api/workouts`, making it permanent in the route-name picker.
+
+Useful smoke test:
+
+```bash
+curl -k -X POST https://kickr.localhost/api/workout-builder \
+  -H "Content-Type: application/json" \
+  -d '{"instructions":"45 minutes endurance, mostly Z2, keep it gentle because HR ran high last ride"}'
+```
+
+If you are not using Portless, replace `https://kickr.localhost` with `http://localhost:3000`.
+
+## Post-Ride LLM Summaries
+
+When the rider taps **Finish & Save**, the workout player asks for optional free-text comments. The browser posts the full `RideSession` to `POST /api/sessions`; the server enriches it through `lib/ride-summary.ts` before writing to SQLite. If no summary model/key is configured, the ride still saves with `llmSummaryStatus: "skipped"`.
+
+Stored per-session summary fields:
+
+- `riderComments`
+- `llmSummary`
+- `llmSummaryStatus`: `generated`, `skipped`, or `failed`
+- `llmSummaryError`
+
+### Technical Analysis: Ride-Summary Payload Calculations
+
+The LLM does not receive raw telemetry as its main context. The server converts second-level samples into a compact, auditable payload in `buildRideSummaryPayload()`.
+
+Session identity and timing:
+
+- `startedAtIso` is derived from the first sample timestamp, falling back to the session save timestamp.
+- `savedAtIso` is derived from `session.timestamp`.
+- `durationSeconds` comes from `session.metrics.durationSeconds`; if absent, it falls back to `samples.length`.
+- `riderComments` is the trimmed text entered in the Finish & Save dialog.
+
+Stored ride metrics:
+
+- `avgPower`, `avgHr`, and `avgCadence` are calculated in `calculateActualMetrics()` by averaging non-missing sample values.
+- `durationSeconds` currently assumes roughly one persisted sample per second.
+- Normalized Power (`np`) is calculated from rolling 30-second average power values raised to the fourth power, averaged, then fourth-rooted.
+- Intensity Factor (`iff`) is `np / ftp`.
+- Training Stress Score (`tss`) is `(durationSeconds * np * iff) / (ftp * 36)`. This is equivalent to the standard hourly TSS formula after unit simplification.
+
+Rider profile context:
+
+- The payload includes FTP, MAP, AC, NM, cTHR, age, weight, HR zones, and the current `memorySummary` from `rider_profile`.
+- The image-provided 4DP values currently match the SQLite row: NM `821`, AC `335`, MAP `216`, FTP `172`.
+
+Heart-rate zone distribution:
+
+- Each HR zone is read from `riderProfile.hrZones`.
+- For every sample with `heartRateBpm`, the code counts a second in the zone whose inclusive range contains that BPM: `minBpm <= heartRateBpm <= maxBpm`.
+- Percent is `zoneSeconds / durationSeconds * 100`, rounded to one decimal.
+- Samples with missing HR are not assigned to a zone; missing HR count is reported separately in data quality.
+
+Power-zone distribution:
+
+- Power zones are derived from current FTP, not from named workout blocks:
+  - off/coasting: `<= 0 W`
+  - recovery: `1 W` to `55% FTP`
+  - endurance: `>55%` to `75% FTP`
+  - tempo: `>75%` to `90% FTP`
+  - threshold: `>90%` to `105% FTP`
+  - VO2: `>105%` to `120% FTP`
+  - anaerobic: `>120% FTP`
+- Percent is `zoneSeconds / durationSeconds * 100`, rounded to one decimal.
+
+Series summaries:
+
+- Power, heart rate, cadence, speed, and resistance each get `count`, `missing`, `min`, `max`, `avg`, `median`, `p10`, and `p90`.
+- Percentiles sort available values and linearly interpolate between neighboring ranks.
+- Missing values are excluded from averages and percentiles, then counted explicitly.
+
+Splits and aerobic drift:
+
+- Split averages are computed for `first_half`, `second_half`, `first_third`, and `last_third`.
+- Each split reports average power, heart rate, and cadence from non-missing values.
+- Aerobic decoupling compares power-per-bpm in the first half and second half using samples with both positive power and HR.
+- `percentChange` is `(secondHalfPowerPerBpm - firstHalfPowerPerBpm) / firstHalfPowerPerBpm * 100`. A negative value means less power per heartbeat later in the ride.
+
+Data quality:
+
+- Timestamps are converted into sample gaps in seconds.
+- The payload reports average sample gap, max sample gap, gaps over two seconds, and missing seconds for power, HR, and cadence.
+- The prompt instructs the model to reduce confidence when data quality is weak.
+
+Prompt guardrails:
+
+- The model is told to be specific with numbers, avoid medical diagnosis, avoid changing HR zones from one ride alone, and treat indoor speed as low-value unless simulation mode is relevant.
+- It returns structured JSON: headline, summary, key observations, HR-zone assessment, rider-comments reflection, training-load assessment, data-quality notes, next focus, and a compact durable memory candidate.
 
 ## Local Agent Bridge
 
@@ -177,7 +284,7 @@ When testing trainer commands, confirm both `command_applied` and a following `r
 
 ## SQLite Persistence
 
-Runtime data is stored in `.data/kickr.sqlite`, which is intentionally ignored by git. The database currently contains `ride_sessions`, `ride_samples`, `agent_events`, `agent_commands`, and `rider_profile`.
+Runtime data is stored in `.data/kickr.sqlite`, which is intentionally ignored by git. The database currently contains `ride_sessions`, `ride_samples`, `agent_events`, `agent_commands`, `rider_profile`, and `monthly_summaries`.
 
 The browser still keeps a localStorage fallback for existing history and offline resilience. On first load, if SQLite has no sessions but localStorage does, the app backfills those sessions into SQLite.
 

@@ -4,10 +4,8 @@ import { useRef, useState, useEffect } from "react";
 import { KickrCore2Client } from "@/lib/kickr-client";
 import { HeartRateClient } from "@/lib/hr-client";
 import { Button } from "@/components/ui/button";
-import { Cog, LoaderCircle, Volume2, VolumeX } from "lucide-react";
+import { Cog } from "lucide-react";
 import { getRiderProfile, RIDER_PROFILE, saveRiderProfile, type RiderProfile } from "@/lib/profile";
-import type { AgentCommand, AgentEvent } from "@/lib/agent";
-import { hookRideEnded, hookRideStarted } from "@/lib/openclaw-hooks";
 import { WorkoutPlayer, type WorkoutPlayerHandle } from "@/components/workout-player";
 import { 
   RideSession, 
@@ -29,26 +27,6 @@ import {
 type ConnectionState = "disconnected" | "connecting" | "connected";
 type TrainerMode = "erg" | "resistance";
 type ActiveTrainerMode = { type: "none" } | { type: "erg", watts: number } | { type: "resistance", level: number };
-type AgentJournalEntry = {
-  id: string;
-  timestamp: number;
-  label: string;
-  reason?: string;
-  status: "received" | "applied" | "failed";
-  message?: string;
-};
-type LiveCoachTurn = {
-  role: "user" | "assistant";
-  text: string;
-  timestamp: number;
-  command?: string;
-  execution?: "applied" | "failed" | "none";
-};
-type LiveCoachChatMessage = LiveCoachTurn & {
-  id: string;
-  kind: "text" | "audio" | "action" | "status";
-};
-// Voice feedback states & helper types removed
 
 export default function App() {
   const clientRef = useRef(new KickrCore2Client());
@@ -72,13 +50,6 @@ export default function App() {
   
   // What the trainer is currently running
   const [activeTrainerMode, setActiveTrainerMode] = useState<ActiveTrainerMode>({ type: "none" });
-  const [agentJournal, setAgentJournal] = useState<AgentJournalEntry[]>([]);
-  const [agentMessage, setAgentMessage] = useState<string | null>(null);
-  const [voiceFeedbackEnabled, setVoiceFeedbackEnabled] = useState(false);
-  const [speechSupported, setSpeechSupported] = useState(false);
-  const [liveCoachInput, setLiveCoachInput] = useState("");
-  const [liveCoachMessages, setLiveCoachMessages] = useState<LiveCoachChatMessage[]>([]);
-  const [liveCoachSending, setLiveCoachSending] = useState(false);
   const [isSavingSession, setIsSavingSession] = useState(false);
   const [savedSummarySession, setSavedSummarySession] = useState<RideSession | null>(null);
   const [isSavedSummaryOpen, setIsSavedSummaryOpen] = useState(false);
@@ -88,10 +59,6 @@ export default function App() {
   const activeWorkoutNameRef = useRef<string>("Manual Ride");
   const workoutPlayerRef = useRef<WorkoutPlayerHandle | null>(null);
   const unsavedSamplesRef = useRef<any[]>([]);
-  const pollingAgentCommandsRef = useRef(false);
-  const activeHookSessionRef = useRef<string | null>(null);
-  const lastSpokenAgentMessageRef = useRef<{ text: string; timestamp: number } | null>(null);
-  const liveCoachTurnsRef = useRef<LiveCoachTurn[]>([]);
 
   useEffect(() => {
     getSavedRideSessions().then(setSessions);
@@ -100,16 +67,6 @@ export default function App() {
       setSettingsProfile(profile);
     });
 
-    const hydrateVoiceFeedback = window.setTimeout(() => {
-      setSpeechSupported(
-        "speechSynthesis" in window && "SpeechSynthesisUtterance" in window
-      );
-      setVoiceFeedbackEnabled(
-        window.localStorage.getItem("kickr.voiceFeedbackEnabled") === "true"
-      );
-    }, 0);
-
-    return () => window.clearTimeout(hydrateVoiceFeedback);
   }, []);
 
   const logSamples = async (samples: any[], isNew: boolean, finalMetrics?: any) => {
@@ -131,71 +88,6 @@ export default function App() {
     } catch (e) {
       console.error("Failed to log samples to server:", e);
     }
-  };
-
-  const logAgentEvent = async (event: AgentEvent) => {
-    try {
-      await fetch("/api/agent/events", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(event),
-      });
-    } catch (e) {
-      console.error("Failed to log agent event:", e);
-    }
-  };
-
-  const describeAgentCommand = (command: AgentCommand) => {
-    if (command.type === "set_erg_watts") return `Set ERG to ${command.watts} W`;
-    if (command.type === "set_resistance") return `Set resistance to ${command.percent}%`;
-    if (command.type === "set_trainer_mode" && command.mode === "erg") {
-      return `Set ERG to ${command.targetWatts} W`;
-    }
-    if (command.type === "set_trainer_mode" && command.mode === "resistance") {
-      return `Set resistance to ${command.percent ?? command.level}%`;
-    }
-    if (command.type === "send_message") return command.text;
-    if (command.type === "request_rider_voice_feedback") {
-      return command.prompt || "Request rider voice feedback";
-    }
-    if (command.type === "start_trainer") return "Start trainer";
-    if (command.type === "stop_trainer") return "Stop trainer";
-    if (command.type === "set_workout_plan") {
-      const total = command.blocks.reduce((s, b) => s + (b.durationSeconds || 0), 0);
-      return `New plan: ${command.blocks.length} blocks, ${Math.round(total / 60)} min`;
-    }
-    return "Agent command";
-  };
-
-  const updateAgentJournal = (
-    command: AgentCommand,
-    status: AgentJournalEntry["status"],
-    message?: string
-  ) => {
-    const id = command.id || `agent-command-${Date.now()}`;
-
-    setAgentJournal((prev) => {
-      const existing = prev.find((entry) => entry.id === id);
-      if (existing) {
-        return prev.map((entry) =>
-          entry.id === id
-            ? { ...entry, status, message, timestamp: Date.now() }
-            : entry
-        );
-      }
-
-      return [
-        {
-          id,
-          timestamp: Date.now(),
-          label: describeAgentCommand(command),
-          reason: command.reason,
-          status,
-          message,
-        },
-        ...prev,
-      ].slice(0, 12);
-    });
   };
 
   const setDraftProfileNumber = (
@@ -260,259 +152,9 @@ export default function App() {
     }
   };
 
-  const speakAgentMessage = (text: string, force = false) => {
-    if ((!voiceFeedbackEnabled && !force) || !speechSupported) return;
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
-
-    const spokenText = text.trim().replace(/\s+/g, " ").slice(0, 240);
-    if (!spokenText) return;
-
-    const now = Date.now();
-    const last = lastSpokenAgentMessageRef.current;
-    if (!force && last?.text === spokenText && now - last.timestamp < 30_000) return;
-
-    lastSpokenAgentMessageRef.current = { text: spokenText, timestamp: now };
-    window.speechSynthesis.cancel();
-
-    const utterance = new SpeechSynthesisUtterance(spokenText);
-    utterance.lang = navigator.language || "en-US";
-    utterance.rate = 0.95;
-    utterance.pitch = 1;
-    utterance.volume = 0.9;
-    window.speechSynthesis.speak(utterance);
-  };
-
-  const handleVoiceFeedbackToggle = (enabled: boolean) => {
-    setVoiceFeedbackEnabled(enabled);
-    window.localStorage.setItem("kickr.voiceFeedbackEnabled", String(enabled));
-
-    if (!enabled) {
-      window.speechSynthesis?.cancel();
-      return;
-    }
-
-    speakAgentMessage("Voice feedback enabled.", true);
-  };
-
-  // Voice feedback helpers removed
-
-  const makeLiveCoachMessageId = () =>
-    `live-coach-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-  const rememberLiveCoachTurn = (
-    turn: LiveCoachTurn,
-    kind: LiveCoachChatMessage["kind"] = turn.role === "assistant" ? "action" : "text"
-  ) => {
-    liveCoachTurnsRef.current = [...liveCoachTurnsRef.current, turn].slice(-12);
-    setLiveCoachMessages((messages) =>
-      [
-        ...messages,
-        {
-          id: makeLiveCoachMessageId(),
-          kind,
-          ...turn,
-        },
-      ].slice(-24)
-    );
-  };
-
-  const requestLiveCoachCommand = async (input?: { riderText?: string }) => {
-    const payload = {
-      snapshot: getHookSnapshot(),
-      riderText: input?.riderText,
-      conversationHistory: liveCoachTurnsRef.current,
-    };
-
-    const res = await fetch("/api/coach/live", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    const data = await res.json().catch(() => null);
-    if (!res.ok) {
-      throw new Error(data?.error || "Live coach request failed");
-    }
-
-    return data as {
-      model?: string;
-      degraded?: boolean;
-      error?: string;
-      command?: AgentCommand | null;
-      action?: { action?: string; reason?: string };
-    };
-  };
-
-  const sendLiveCoachTurn = async (input?: {
-    userText?: string;
-    userKind?: LiveCoachChatMessage["kind"];
-  }) => {
-    if (input?.userText) {
-      await logAgentEvent({
-        type: "rider_feedback",
-        sessionId: currentSessionFilenameRef.current,
-        timestamp: Date.now(),
-        text: input.userText,
-      });
-      rememberLiveCoachTurn(
-        {
-          role: "user",
-          text: input.userText,
-          timestamp: Date.now(),
-          execution: "none",
-        },
-        input.userKind || "text"
-      );
-    }
-
-    const response = await requestLiveCoachCommand({
-      riderText: input?.userText,
-    });
-    let executionResult: Awaited<ReturnType<typeof executeAgentCommand>> | null = null;
-    if (response.command) {
-      executionResult = await executeAgentCommand(response.command);
-    }
-    const assistantText = response.command
-      ? executionResult?.ok === false
-        ? `I tried ${describeCommand(response.command)}, but it failed: ${executionResult.message}`
-        : `I applied ${describeCommand(response.command)}.`
-      : response.degraded
-        ? `No trainer action: ${response.error || response.action?.reason || "live coach unavailable"}.`
-        : `No trainer action: ${response.action?.action || "none"}.`;
-
-    rememberLiveCoachTurn(
-      {
-        role: "assistant",
-        text: assistantText,
-        timestamp: Date.now(),
-        command: response.command ? describeCommand(response.command) : undefined,
-        execution: executionResult?.ok === false ? "failed" : response.command ? "applied" : "none",
-      },
-      response.command ? "action" : "status"
-    );
-
-    return { response, executionResult };
-  };
-
-  const describeCommand = (command: AgentCommand) => {
-    if (command.type === "set_erg_watts") return `ERG ${command.watts} W`;
-    if (command.type === "set_resistance") return `resistance ${command.percent}%`;
-    if (command.type === "set_workout_plan") {
-      const firstTarget = command.blocks[0]?.targetPower;
-      return firstTarget ? `workout plan from ${firstTarget} W` : "workout plan";
-    }
-    if (command.type === "send_message") return "coach message";
-    if (command.type === "request_rider_voice_feedback") return "voice feedback request";
-    if (command.type === "start_trainer") return "trainer start";
-    if (command.type === "stop_trainer") return "trainer stop";
-    if (command.type === "set_trainer_mode" && command.mode === "erg") {
-      return `ERG ${command.targetWatts} W`;
-    }
-    if (command.type === "set_trainer_mode" && command.mode === "resistance") {
-      return `resistance ${command.percent ?? command.level}%`;
-    }
-    return (command as { type: string }).type;
-  };
-
-  const sendLiveCoachText = async () => {
-    const text = liveCoachInput.trim();
-    if (!text || liveCoachSending) return;
-    setLiveCoachInput("");
-    setLiveCoachSending(true);
-
-    try {
-      await sendLiveCoachTurn({ userText: text, userKind: "text" });
-    } catch (error) {
-      console.error("Error sending live coach text:", error);
-    } finally {
-      setLiveCoachSending(false);
-    }
-  };
-
   const currentHrZone = heartRate 
     ? riderProfile.hrZones.find(z => heartRate >= z.minBpm && heartRate <= z.maxBpm) 
     : undefined;
-
-  const averageRecentSampleValue = (
-    samples: typeof clientRef.current.samples,
-    windowMs: number,
-    key: "powerW" | "cadenceRpm" | "heartRateBpm"
-  ) => {
-    const cutoff = Date.now() - windowMs;
-    const values = samples
-      .filter((sample) => sample.timestamp >= cutoff)
-      .map((sample) => sample[key])
-      .filter((value): value is number => typeof value === "number");
-
-    if (values.length === 0) return null;
-    return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
-  };
-
-  const getHeartRateTrend = (samples: typeof clientRef.current.samples) => {
-    const cutoff = Date.now() - 60_000;
-    const values = samples
-      .filter(
-        (sample) =>
-          sample.timestamp >= cutoff && typeof sample.heartRateBpm === "number"
-      )
-      .map((sample) => ({
-        timestamp: sample.timestamp,
-        heartRateBpm: sample.heartRateBpm as number,
-      }));
-
-    if (values.length < 2) return null;
-
-    const first = values[0];
-    const last = values[values.length - 1];
-    const minutes = (last.timestamp - first.timestamp) / 60_000;
-    if (minutes <= 0) return null;
-
-    return Number(((last.heartRateBpm - first.heartRateBpm) / minutes).toFixed(1));
-  };
-
-  const getRollingSnapshot = (samples: typeof clientRef.current.samples) => ({
-    powerAvg15s: averageRecentSampleValue(samples, 15_000, "powerW"),
-    powerAvg60s: averageRecentSampleValue(samples, 60_000, "powerW"),
-    cadenceAvg15s: averageRecentSampleValue(samples, 15_000, "cadenceRpm"),
-    cadenceAvg60s: averageRecentSampleValue(samples, 60_000, "cadenceRpm"),
-    heartRateAvg15s: averageRecentSampleValue(samples, 15_000, "heartRateBpm"),
-    heartRateAvg60s: averageRecentSampleValue(samples, 60_000, "heartRateBpm"),
-    heartRateTrendBpmPerMin: getHeartRateTrend(samples),
-  });
-
-  const getHookSnapshot = () => {
-    const samples = clientRef.current.samples;
-    const latestSample = samples.length > 0 ? samples[samples.length - 1] : undefined;
-    const lastAgentEntry = agentJournal[0];
-
-    return {
-      activeTrainerMode,
-      latestSample,
-      workoutName: activeWorkoutNameRef.current,
-      remainingWorkout: workoutPlayerRef.current?.getRemainingWorkoutSnapshot() ?? null,
-      sampleCount: samples.length,
-      connectionState,
-      hrConnectionState,
-      currentHrZone,
-      rolling: getRollingSnapshot(samples),
-      riderProfile: {
-        ftp: riderProfile.fourDP.ftp,
-        map: riderProfile.fourDP.map,
-        ac: riderProfile.fourDP.ac,
-        nm: riderProfile.fourDP.nm,
-        cTHR: riderProfile.cTHR,
-        memorySummary: riderProfile.memorySummary,
-      },
-      lastAgentEntry: lastAgentEntry
-        ? {
-            label: lastAgentEntry.label,
-            status: lastAgentEntry.status,
-            reason: lastAgentEntry.reason,
-            message: lastAgentEntry.message,
-          }
-        : null,
-    };
-  };
 
   async function connect() {
     try {
@@ -540,9 +182,6 @@ export default function App() {
           }
         },
         () => {
-          const endedSessionId = activeHookSessionRef.current;
-          activeHookSessionRef.current = null;
-
           setConnectionState("disconnected");
           setPower(undefined);
           setCadence(undefined);
@@ -555,21 +194,9 @@ export default function App() {
             logSamples(unsavedSamplesRef.current, false);
             unsavedSamplesRef.current = [];
           }
-
-          if (endedSessionId) {
-            hookRideEnded(endedSessionId, {
-              ...getHookSnapshot(),
-              connectionState: "disconnected",
-            });
-          }
         }
       );
       setConnectionState("connected");
-      activeHookSessionRef.current = currentSessionFilenameRef.current;
-      hookRideStarted(currentSessionFilenameRef.current, {
-        ...getHookSnapshot(),
-        connectionState: "connected",
-      });
     } catch (e) {
       setConnectionState("disconnected");
       console.error(e);
@@ -646,138 +273,6 @@ export default function App() {
       alert(e instanceof Error ? e.message : String(e));
     }
   }
-
-  const executeAgentCommand = async (command: AgentCommand) => {
-    updateAgentJournal(command, "received");
-    await logAgentEvent({
-      type: "command_received",
-      sessionId: currentSessionFilenameRef.current,
-      timestamp: Date.now(),
-      command,
-    });
-
-    try {
-      if (command.type === "set_erg_watts") {
-        await setTrainerTargetPower(command.watts);
-        workoutPlayerRef.current?.applyErgOverrideUntilNextStep(command.watts);
-      } else if (command.type === "set_resistance") {
-        await setTrainerResistance(command.percent);
-      } else if (command.type === "set_trainer_mode" && command.mode === "erg") {
-        if (typeof command.targetWatts !== "number") {
-          throw new Error("set_trainer_mode erg requires targetWatts");
-        }
-        await setTrainerTargetPower(command.targetWatts);
-        workoutPlayerRef.current?.applyErgOverrideUntilNextStep(command.targetWatts);
-      } else if (command.type === "set_trainer_mode" && command.mode === "resistance") {
-        const level = typeof command.percent === "number" ? command.percent : command.level;
-        if (typeof level !== "number") {
-          throw new Error("set_trainer_mode resistance requires percent or level");
-        }
-        await setTrainerResistance(level);
-      } else if (command.type === "send_message") {
-        setAgentMessage(command.text);
-        if (command.speak !== false) {
-          speakAgentMessage(command.text);
-        }
-      } else if (command.type === "request_rider_voice_feedback") {
-        setAgentMessage("Rider voice feedback requested, but voice input is disabled.");
-      } else if (command.type === "start_trainer") {
-        await clientRef.current.start();
-      } else if (command.type === "stop_trainer") {
-        await clientRef.current.stop();
-      } else if (command.type === "set_workout_plan") {
-        if (!workoutPlayerRef.current) {
-          throw new Error("Workout player not ready to apply plan");
-        }
-        workoutPlayerRef.current.applyPlanCommand(
-          command.blocks,
-          typeof command.leadSeconds === "number" ? command.leadSeconds : 20
-        );
-      } else {
-        const unsupported = command as { type?: string };
-        throw new Error(`Unsupported agent command: ${unsupported.type ?? "unknown"}`);
-      }
-
-      updateAgentJournal(command, "applied");
-      await logAgentEvent({
-        type: "command_applied",
-        sessionId: currentSessionFilenameRef.current,
-        timestamp: Date.now(),
-        command,
-      });
-      return { ok: true as const };
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      updateAgentJournal(command, "failed", message);
-      await logAgentEvent({
-        type: "command_failed",
-        sessionId: currentSessionFilenameRef.current,
-        timestamp: Date.now(),
-        command,
-        message,
-      });
-      return { ok: false as const, message };
-    }
-  };
-
-  useEffect(() => {
-    if (connectionState !== "connected") return;
-
-    const pollAgentCommands = async () => {
-      if (pollingAgentCommandsRef.current) return;
-      if (!clientRef.current.isConnected) return;
-
-      pollingAgentCommandsRef.current = true;
-
-      try {
-        const res = await fetch("/api/agent/commands");
-        if (!res.ok) return;
-
-        const data = await res.json();
-        const commands = Array.isArray(data.commands) ? data.commands as AgentCommand[] : [];
-
-        for (const command of commands) {
-          await executeAgentCommand(command);
-        }
-      } catch (e) {
-        console.error("Failed to poll agent commands:", e);
-      } finally {
-        pollingAgentCommandsRef.current = false;
-      }
-    };
-
-    const interval = window.setInterval(pollAgentCommands, 3000);
-    pollAgentCommands();
-
-    return () => window.clearInterval(interval);
-  }, [connectionState]);
-
-  useEffect(() => {
-    if (connectionState !== "connected") return;
-
-    const sendSnapshot = () => {
-      const samples = clientRef.current.samples;
-      const latestSample = samples.length > 0 ? samples[samples.length - 1] : undefined;
-
-      logAgentEvent({
-        type: "ride_snapshot",
-        sessionId: currentSessionFilenameRef.current,
-        timestamp: Date.now(),
-        workoutName: activeWorkoutNameRef.current,
-        connectionState,
-        hrConnectionState,
-        activeTrainerMode,
-        latestSample,
-        sampleCount: samples.length,
-        riderProfile,
-      });
-    };
-
-    const interval = window.setInterval(sendSnapshot, 5000);
-    sendSnapshot();
-
-    return () => window.clearInterval(interval);
-  }, [activeTrainerMode, connectionState, hrConnectionState, riderProfile]);
 
   const handleStopSession = async (workoutName: string, riderComments?: string) => {
     const samples = [...clientRef.current.samples];
@@ -983,7 +478,7 @@ export default function App() {
               <DialogHeader>
                 <DialogTitle>Rider Settings</DialogTitle>
                 <DialogDescription>
-                  Profile values used by workouts, ride metrics, and the local agent.
+                  Profile values used by workouts, ride metrics, and summaries.
                 </DialogDescription>
               </DialogHeader>
               <div className="flex flex-col gap-6 mt-4">
@@ -1305,164 +800,6 @@ export default function App() {
                 </p>
               </div>
             )}
-          </div>
-
-          <div className="flex flex-col gap-3 p-4 rounded-md border bg-card">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="font-semibold text-base">Agent Controller</h2>
-                <p className="text-xs text-muted-foreground">
-                  Local command inbox: <span className="font-mono">/api/agent/commands</span>
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant={voiceFeedbackEnabled ? "secondary" : "outline"}
-                  size="icon-sm"
-                  aria-label={voiceFeedbackEnabled ? "Disable voice feedback" : "Enable voice feedback"}
-                  title={speechSupported ? "Voice feedback" : "Voice feedback is not supported in this browser"}
-                  disabled={!speechSupported}
-                  onClick={() => handleVoiceFeedbackToggle(!voiceFeedbackEnabled)}
-                >
-                  {voiceFeedbackEnabled ? <Volume2 /> : <VolumeX />}
-                </Button>
-                <span className="rounded-sm bg-muted px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                  Direct
-                </span>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/20 px-3 py-2">
-              <div className="min-w-0">
-                <div className="text-xs font-semibold">Voice feedback</div>
-                <div className="text-[11px] text-muted-foreground">
-                  {speechSupported ? (voiceFeedbackEnabled ? "On" : "Off") : "Unavailable"}
-                </div>
-              </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="xs"
-                disabled={!speechSupported || !voiceFeedbackEnabled}
-                onClick={() => speakAgentMessage("KICKR voice feedback is ready.", true)}
-              >
-                Test
-              </Button>
-            </div>
-
-            {agentMessage && (
-              <div className="rounded-md border bg-muted/30 p-3 text-sm">
-                <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                  Latest Agent Note
-                </div>
-                <p>{agentMessage}</p>
-              </div>
-            )}
-
-            <div className="flex min-h-[220px] flex-col rounded-md border bg-muted/20">
-              <div className="flex-1 space-y-2 overflow-y-auto p-3">
-                {liveCoachMessages.length === 0 ? (
-                  <div className="py-8 text-center text-xs text-muted-foreground">
-                    Ask the live coach by text.
-                  </div>
-                ) : (
-                  liveCoachMessages.map((message) => (
-                    <div
-                      key={message.id}
-                      className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
-                    >
-                      <div
-                        className={`max-w-[85%] rounded-md border px-3 py-2 text-xs ${
-                          message.role === "user"
-                            ? "border-primary/30 bg-primary/10"
-                            : message.execution === "failed"
-                              ? "border-red-500/30 bg-red-500/10 text-red-700"
-                              : "bg-background/80"
-                        }`}
-                      >
-                        <div className="mb-1 flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                          <span>{message.role === "user" ? "You" : "Live Coach"}</span>
-                          {message.command && <span>{message.command}</span>}
-                        </div>
-                        <div>{message.text}</div>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-              <div className="border-t bg-background/60 p-2">
-                <div className="flex gap-2">
-                  <input
-                    value={liveCoachInput}
-                    onChange={(e) => setLiveCoachInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        sendLiveCoachText();
-                      }
-                    }}
-                    placeholder="Ask: did you change power, make it easier, hold this..."
-                    className="min-w-0 flex-1 rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
-                    disabled={liveCoachSending}
-                  />
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={sendLiveCoachText}
-                    disabled={!liveCoachInput.trim() || liveCoachSending}
-                  >
-                    {liveCoachSending ? (
-                      <LoaderCircle className="animate-spin" />
-                    ) : (
-                      "Send"
-                    )}
-                  </Button>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex flex-col gap-2">
-              {agentJournal.length === 0 ? (
-                <p className="py-2 text-xs text-muted-foreground">
-                  Waiting for local agent commands.
-                </p>
-              ) : (
-                agentJournal.map((entry) => (
-                  <div key={entry.id} className="rounded-md border bg-muted/10 p-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-medium">{entry.label}</div>
-                        {entry.reason && (
-                          <div className="mt-1 text-xs text-muted-foreground">{entry.reason}</div>
-                        )}
-                        {entry.message && (
-                          <div className="mt-1 text-xs text-red-500">{entry.message}</div>
-                        )}
-                      </div>
-                      <span
-                        className={`shrink-0 rounded-sm px-2 py-0.5 text-[10px] font-bold uppercase ${
-                          entry.status === "applied"
-                            ? "bg-green-500/15 text-green-600"
-                            : entry.status === "failed"
-                              ? "bg-red-500/15 text-red-600"
-                              : "bg-yellow-500/15 text-yellow-600"
-                        }`}
-                      >
-                        {entry.status}
-                      </span>
-                    </div>
-                    <div className="mt-2 text-[10px] text-muted-foreground">
-                      {new Date(entry.timestamp).toLocaleTimeString([], {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                        second: "2-digit",
-                      })}
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
           </div>
 
           <div className="flex flex-col gap-2 pt-2 border-t">

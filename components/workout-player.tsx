@@ -603,8 +603,16 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
           <h2 className="text-2xl font-bold">Workout Player</h2>
-          <div className="flex items-center gap-2 px-3 py-1.5 border rounded-md bg-muted/20">
-            <span className="font-bold text-sm truncate max-w-[250px]">{workout.name}</span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsPickerOpen(true)}
+              className="flex min-w-0 items-center gap-2 rounded-md border bg-muted/20 px-3 py-1.5 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              title="Select workout"
+            >
+              <span className="max-w-[250px] truncate text-sm font-bold">{workout.name}</span>
+              <span className="text-xs text-muted-foreground" aria-hidden="true">▾</span>
+            </button>
             {/* Adaptive Freeride ticker removed */}
             {workout.id.startsWith("imported-") && (
               <button
@@ -637,7 +645,7 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
               handleStop();
             }}
             disabled={isPlaying}
-            title="Start an LLM-coached freeride. Begins at 80 W; use the live coach chat to request plan changes."
+            title="Load a flexible freeride plan that starts at 80 W."
           >
             {adaptive ? "Adaptive Loaded" : "Adaptive Freeride"}
           </Button>
@@ -654,9 +662,6 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
             {renderBuilderDialogContent()}
           </Dialog>
           <Dialog open={isPickerOpen} onOpenChange={setIsPickerOpen}>
-            <DialogTrigger asChild>
-              <Button variant="outline" size="sm">Change Workout</Button>
-            </DialogTrigger>
             <DialogContent className="sm:max-w-2xl max-h-[85vh] flex flex-col p-0 overflow-hidden">
               <DialogHeader className="p-6 pb-2 flex flex-row items-center justify-between space-y-0">
                 <div>
