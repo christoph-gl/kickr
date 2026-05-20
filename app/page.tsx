@@ -4,7 +4,7 @@ import { useRef, useState, useEffect } from "react";
 import { KickrCore2Client } from "@/lib/kickr-client";
 import { HeartRateClient } from "@/lib/hr-client";
 import { Button } from "@/components/ui/button";
-import { Cog, LoaderCircle, Mic, MicOff, Volume2, VolumeX } from "lucide-react";
+import { Cog, LoaderCircle, Volume2, VolumeX } from "lucide-react";
 import { getRiderProfile, RIDER_PROFILE, saveRiderProfile, type RiderProfile } from "@/lib/profile";
 import type { AgentCommand, AgentEvent } from "@/lib/agent";
 import { hookRideEnded, hookRideStarted } from "@/lib/openclaw-hooks";
@@ -20,6 +20,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -47,20 +48,7 @@ type LiveCoachChatMessage = LiveCoachTurn & {
   id: string;
   kind: "text" | "audio" | "action" | "status";
 };
-type CoachCheckState = {
-  status: "idle" | "pending" | "sent" | "skipped" | "error";
-  message: string;
-  target?: string;
-  targetUrl?: string;
-};
-type RiderVoiceFeedbackState = {
-  status: "idle" | "listening" | "sending" | "sent" | "error" | "unsupported";
-  prompt: string;
-  audioNote: string;
-  remainingSeconds: number;
-  message: string;
-  target?: string;
-};
+// Voice feedback states & helper types removed
 
 export default function App() {
   const clientRef = useRef(new KickrCore2Client());
@@ -86,23 +74,14 @@ export default function App() {
   const [activeTrainerMode, setActiveTrainerMode] = useState<ActiveTrainerMode>({ type: "none" });
   const [agentJournal, setAgentJournal] = useState<AgentJournalEntry[]>([]);
   const [agentMessage, setAgentMessage] = useState<string | null>(null);
-  const [coachCheckState, setCoachCheckState] = useState<CoachCheckState>({
-    status: "idle",
-    message: "No coach check sent yet.",
-  });
   const [voiceFeedbackEnabled, setVoiceFeedbackEnabled] = useState(false);
   const [speechSupported, setSpeechSupported] = useState(false);
-  const [audioRecordingSupported, setAudioRecordingSupported] = useState(false);
   const [liveCoachInput, setLiveCoachInput] = useState("");
   const [liveCoachMessages, setLiveCoachMessages] = useState<LiveCoachChatMessage[]>([]);
-  const [riderVoiceFeedback, setRiderVoiceFeedback] =
-    useState<RiderVoiceFeedbackState>({
-      status: "idle",
-      prompt: "",
-      audioNote: "",
-      remainingSeconds: 0,
-      message: "No rider voice request yet.",
-    });
+  const [liveCoachSending, setLiveCoachSending] = useState(false);
+  const [isSavingSession, setIsSavingSession] = useState(false);
+  const [savedSummarySession, setSavedSummarySession] = useState<RideSession | null>(null);
+  const [isSavedSummaryOpen, setIsSavedSummaryOpen] = useState(false);
 
   const [sessions, setSessions] = useState<RideSession[]>([]);
   const currentSessionFilenameRef = useRef<string | null>(null);
@@ -112,18 +91,7 @@ export default function App() {
   const pollingAgentCommandsRef = useRef(false);
   const activeHookSessionRef = useRef<string | null>(null);
   const lastSpokenAgentMessageRef = useRef<{ text: string; timestamp: number } | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const speechTimeoutRef = useRef<number | null>(null);
-  const speechCountdownRef = useRef<number | null>(null);
   const liveCoachTurnsRef = useRef<LiveCoachTurn[]>([]);
-  const riderVoiceFeedbackRef = useRef({
-    active: false,
-    prompt: "",
-    audioBlob: null as Blob | null,
-    finalized: false,
-  });
 
   useEffect(() => {
     getSavedRideSessions().then(setSessions);
@@ -135,10 +103,6 @@ export default function App() {
     const hydrateVoiceFeedback = window.setTimeout(() => {
       setSpeechSupported(
         "speechSynthesis" in window && "SpeechSynthesisUtterance" in window
-      );
-      setAudioRecordingSupported(
-        Boolean(navigator.mediaDevices?.getUserMedia) &&
-          typeof MediaRecorder !== "undefined"
       );
       setVoiceFeedbackEnabled(
         window.localStorage.getItem("kickr.voiceFeedbackEnabled") === "true"
@@ -330,228 +294,7 @@ export default function App() {
     speakAgentMessage("Voice feedback enabled.", true);
   };
 
-  const clearSpeechTimers = () => {
-    if (speechTimeoutRef.current) {
-      window.clearTimeout(speechTimeoutRef.current);
-      speechTimeoutRef.current = null;
-    }
-    if (speechCountdownRef.current) {
-      window.clearInterval(speechCountdownRef.current);
-      speechCountdownRef.current = null;
-    }
-  };
-
-  const stopVoiceMediaStream = () => {
-    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
-    mediaStreamRef.current = null;
-  };
-
-  const stopRiderVoiceFeedback = () => {
-    clearSpeechTimers();
-    if (mediaRecorderRef.current?.state === "recording") {
-      mediaRecorderRef.current.stop();
-      return;
-    }
-    finalizeRiderVoiceFeedback();
-  };
-
-  const cancelRiderVoiceFeedback = () => {
-    riderVoiceFeedbackRef.current.active = false;
-    riderVoiceFeedbackRef.current.finalized = true;
-    clearSpeechTimers();
-    if (mediaRecorderRef.current?.state === "recording") {
-      mediaRecorderRef.current.stop();
-    }
-    mediaRecorderRef.current = null;
-    audioChunksRef.current = [];
-    stopVoiceMediaStream();
-    setRiderVoiceFeedback((state) => ({
-      ...state,
-      status: "idle",
-      remainingSeconds: 0,
-      message: "Voice feedback canceled.",
-    }));
-  };
-
-  const finalizeRiderVoiceFeedback = async () => {
-    const feedback = riderVoiceFeedbackRef.current;
-    if (!feedback.active || feedback.finalized) return;
-
-    feedback.active = false;
-    feedback.finalized = true;
-    clearSpeechTimers();
-
-    const audioBlob =
-      feedback.audioBlob ||
-      (audioChunksRef.current.length
-        ? new Blob(audioChunksRef.current, {
-            type: audioChunksRef.current[0]?.type || "audio/webm",
-          })
-        : null);
-
-    mediaRecorderRef.current = null;
-    audioChunksRef.current = [];
-    stopVoiceMediaStream();
-
-    if (!audioBlob || audioBlob.size === 0) {
-      setRiderVoiceFeedback((state) => ({
-        ...state,
-        status: "error",
-        remainingSeconds: 0,
-        message: "No audio was recorded. Try a short phrase like harder, easier, or did you change it?",
-      }));
-      return;
-    }
-
-    setRiderVoiceFeedback((state) => ({
-      ...state,
-      status: "sending",
-      audioNote: `Audio note recorded (${Math.max(1, Math.round(audioBlob.size / 1024))} KB).`,
-      remainingSeconds: 0,
-      message: "Asking live coach...",
-    }));
-
-    try {
-      const result = await sendLiveCoachTurn({
-        audioBlob,
-        userText: "Audio message",
-        userKind: "audio",
-      });
-      setRiderVoiceFeedback((state) => ({
-        ...state,
-        status: result.executionResult?.ok === false ? "error" : "sent",
-        target: "live llm",
-        message: result.response.command
-          ? result.executionResult?.ok === false
-            ? `Live coach chose ${describeCommand(result.response.command)}, but it failed: ${result.executionResult.message}`
-            : `${result.response.degraded ? "Degraded live coach" : "Live coach"} applied ${describeCommand(result.response.command)}.`
-          : `Audio sent; ${result.response.model || "live coach"} made no change.`,
-      }));
-      return;
-    } catch (error) {
-      setRiderVoiceFeedback((state) => ({
-        ...state,
-        status: "error",
-        target: "live llm",
-        message: error instanceof Error ? error.message : String(error),
-      }));
-    }
-  };
-
-  const startRiderVoiceFeedbackWindow = async (command: AgentCommand) => {
-    if (command.type !== "request_rider_voice_feedback") return;
-
-    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-      setRiderVoiceFeedback({
-        status: "unsupported",
-        prompt: command.prompt || "How does this effort feel?",
-        audioNote: "",
-        remainingSeconds: 0,
-        message:
-          "Audio recording is unavailable. Use Chrome or Edge and allow microphone access.",
-      });
-      return;
-    }
-
-    const prompt = command.prompt || "How does this effort feel?";
-    const durationSeconds = Math.min(
-      10,
-      Math.max(3, Math.round(command.durationSeconds ?? 10))
-    );
-
-    clearSpeechTimers();
-    if (mediaRecorderRef.current?.state === "recording") {
-      mediaRecorderRef.current.stop();
-    }
-    stopVoiceMediaStream();
-    audioChunksRef.current = [];
-
-    let stream: MediaStream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch (error) {
-      setRiderVoiceFeedback({
-        status: "error",
-        prompt,
-        audioNote: "",
-        remainingSeconds: 0,
-        message: error instanceof Error ? error.message : String(error),
-      });
-      return;
-    }
-
-    const preferredType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-      ? "audio/webm;codecs=opus"
-      : MediaRecorder.isTypeSupported("audio/webm")
-        ? "audio/webm"
-        : "";
-    const recorder = preferredType
-      ? new MediaRecorder(stream, { mimeType: preferredType })
-      : new MediaRecorder(stream);
-
-    mediaStreamRef.current = stream;
-    mediaRecorderRef.current = recorder;
-    riderVoiceFeedbackRef.current = {
-      active: true,
-      prompt,
-      audioBlob: null,
-      finalized: false,
-    };
-
-    setRiderVoiceFeedback({
-      status: "listening",
-      prompt,
-      audioNote: "Recording audio for Flash.",
-      remainingSeconds: durationSeconds,
-      message: "Recording...",
-    });
-
-    speakAgentMessage(prompt);
-
-    recorder.ondataavailable = (event) => {
-      if (event.data.size > 0) {
-        audioChunksRef.current.push(event.data);
-      }
-    };
-
-    recorder.onerror = () => {
-      cancelRiderVoiceFeedback();
-    };
-
-    recorder.onstop = () => {
-      if (riderVoiceFeedbackRef.current.finalized) return;
-      riderVoiceFeedbackRef.current.audioBlob = new Blob(audioChunksRef.current, {
-        type: recorder.mimeType || "audio/webm",
-      });
-      finalizeRiderVoiceFeedback();
-    };
-
-    speechCountdownRef.current = window.setInterval(() => {
-      setRiderVoiceFeedback((state) => ({
-        ...state,
-        remainingSeconds: Math.max(0, state.remainingSeconds - 1),
-      }));
-    }, 1000);
-
-    speechTimeoutRef.current = window.setTimeout(() => {
-      stopRiderVoiceFeedback();
-    }, durationSeconds * 1000);
-
-    try {
-      recorder.start();
-    } catch (error) {
-      riderVoiceFeedbackRef.current.active = false;
-      riderVoiceFeedbackRef.current.finalized = true;
-      clearSpeechTimers();
-      stopVoiceMediaStream();
-      setRiderVoiceFeedback((state) => ({
-        ...state,
-        status: "error",
-        remainingSeconds: 0,
-        message: error instanceof Error ? error.message : String(error),
-      }));
-    }
-  };
+  // Voice feedback helpers removed
 
   const makeLiveCoachMessageId = () =>
     `live-coach-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -573,26 +316,17 @@ export default function App() {
     );
   };
 
-  const requestLiveCoachCommand = async (input?: { audioBlob?: Blob; riderText?: string }) => {
+  const requestLiveCoachCommand = async (input?: { riderText?: string }) => {
     const payload = {
       snapshot: getHookSnapshot(),
       riderText: input?.riderText,
       conversationHistory: liveCoachTurnsRef.current,
     };
-    const body = new FormData();
-    if (input?.audioBlob) {
-      body.append("payload", JSON.stringify(payload));
-      body.append("audio", input.audioBlob, "rider-feedback.webm");
-    }
 
     const res = await fetch("/api/coach/live", {
       method: "POST",
-      ...(input?.audioBlob
-        ? { body }
-        : {
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
     });
 
     const data = await res.json().catch(() => null);
@@ -610,7 +344,6 @@ export default function App() {
   };
 
   const sendLiveCoachTurn = async (input?: {
-    audioBlob?: Blob;
     userText?: string;
     userKind?: LiveCoachChatMessage["kind"];
   }) => {
@@ -619,7 +352,7 @@ export default function App() {
         type: "rider_feedback",
         sessionId: currentSessionFilenameRef.current,
         timestamp: Date.now(),
-        text: input.audioBlob ? "[audio rider feedback]" : input.userText,
+        text: input.userText,
       });
       rememberLiveCoachTurn(
         {
@@ -633,8 +366,7 @@ export default function App() {
     }
 
     const response = await requestLiveCoachCommand({
-      audioBlob: input?.audioBlob,
-      riderText: input?.audioBlob ? undefined : input?.userText,
+      riderText: input?.userText,
     });
     let executionResult: Awaited<ReturnType<typeof executeAgentCommand>> | null = null;
     if (response.command) {
@@ -682,75 +414,18 @@ export default function App() {
     return (command as { type: string }).type;
   };
 
-  const requestCoachCheck = async () => {
-    setCoachCheckState({
-      status: "pending",
-      message: "Asking live coach...",
-    });
-
-    try {
-      const result = await sendLiveCoachTurn({
-        userText: "Coach check",
-        userKind: "status",
-      });
-      setCoachCheckState({
-        status: result.executionResult?.ok === false ? "error" : "sent",
-        target: "live llm",
-        message: result.response.command
-          ? result.executionResult?.ok === false
-            ? `Live coach chose ${describeCommand(result.response.command)}, but it failed: ${result.executionResult.message}`
-            : `${result.response.degraded ? "Degraded live coach" : "Live coach"} applied ${describeCommand(result.response.command)}.`
-          : `No trainer action from ${result.response.model || "live coach"} (${result.response.action?.action || "none"}).`,
-      });
-      return;
-    } catch (error) {
-      setCoachCheckState({
-        status: "error",
-        target: "live llm",
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
-  };
-
-  const requestManualRiderVoiceFeedback = () => {
-    startRiderVoiceFeedbackWindow({
-      type: "request_rider_voice_feedback",
-      prompt: "What should the coach know?",
-      durationSeconds: 10,
-      reason: "Manual rider voice note",
-    });
-  };
-
   const sendLiveCoachText = async () => {
     const text = liveCoachInput.trim();
-    if (!text || riderVoiceFeedback.status === "sending") return;
+    if (!text || liveCoachSending) return;
     setLiveCoachInput("");
-    setRiderVoiceFeedback((state) => ({
-      ...state,
-      status: "sending",
-      audioNote: "",
-      message: "Asking live coach...",
-    }));
+    setLiveCoachSending(true);
 
     try {
-      const result = await sendLiveCoachTurn({ userText: text, userKind: "text" });
-      setRiderVoiceFeedback((state) => ({
-        ...state,
-        status: result.executionResult?.ok === false ? "error" : "sent",
-        target: "live llm",
-        message: result.response.command
-          ? result.executionResult?.ok === false
-            ? `Live coach chose ${describeCommand(result.response.command)}, but it failed: ${result.executionResult.message}`
-            : `${result.response.degraded ? "Degraded live coach" : "Live coach"} applied ${describeCommand(result.response.command)}.`
-          : `Chat sent; ${result.response.model || "live coach"} made no change.`,
-      }));
+      await sendLiveCoachTurn({ userText: text, userKind: "text" });
     } catch (error) {
-      setRiderVoiceFeedback((state) => ({
-        ...state,
-        status: "error",
-        target: "live llm",
-        message: error instanceof Error ? error.message : String(error),
-      }));
+      console.error("Error sending live coach text:", error);
+    } finally {
+      setLiveCoachSending(false);
     }
   };
 
@@ -1005,7 +680,7 @@ export default function App() {
           speakAgentMessage(command.text);
         }
       } else if (command.type === "request_rider_voice_feedback") {
-        startRiderVoiceFeedbackWindow(command);
+        setAgentMessage("Rider voice feedback requested, but voice input is disabled.");
       } else if (command.type === "start_trainer") {
         await clientRef.current.start();
       } else if (command.type === "stop_trainer") {
@@ -1104,28 +779,39 @@ export default function App() {
     return () => window.clearInterval(interval);
   }, [activeTrainerMode, connectionState, hrConnectionState, riderProfile]);
 
-  const handleStopSession = async (workoutName: string) => {
+  const handleStopSession = async (workoutName: string, riderComments?: string) => {
     const samples = [...clientRef.current.samples];
     if (samples.length === 0) return;
+    setIsSavingSession(true);
 
     const metrics = calculateActualMetrics(samples, riderProfile.fourDP.ftp);
-    
-    // Final log of remaining samples and metrics before ending session
-    logSamples(unsavedSamplesRef.current, false, metrics);
-    unsavedSamplesRef.current = [];
 
-    const newSession: RideSession = {
-      id: "session-" + Date.now(),
-      workoutName,
-      timestamp: Date.now(),
-      samples,
-      metrics
-    };
+    try {
+      // Final log of remaining samples and metrics before ending session
+      logSamples(unsavedSamplesRef.current, false, metrics);
+      unsavedSamplesRef.current = [];
 
-    await saveRideSession(newSession);
-    setSessions(prev => [newSession, ...prev]);
-    clientRef.current.samples = []; // Clear samples for next session
-    currentSessionFilenameRef.current = null; // Mark session as ended
+      const newSession: RideSession = {
+        id: "session-" + Date.now(),
+        workoutName,
+        timestamp: Date.now(),
+        samples,
+        metrics,
+        riderComments: riderComments?.trim() || undefined,
+      };
+
+      const savedSession = await saveRideSession(newSession);
+      setSessions(prev => [savedSession, ...prev]);
+      setSavedSummarySession(savedSession);
+      setIsSavedSummaryOpen(true);
+      clientRef.current.samples = []; // Clear samples for next session
+      currentSessionFilenameRef.current = null; // Mark session as ended
+    } catch (error) {
+      console.error("Failed to finish session:", error);
+      alert(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsSavingSession(false);
+    }
   };
 
   const handleExportSession = (session: RideSession) => {
@@ -1194,6 +880,71 @@ export default function App() {
   const inputClass = "h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
   const labelClass = "flex flex-col gap-1 text-xs font-semibold text-muted-foreground";
 
+  const renderRideSummary = (session: RideSession, compact = false) => {
+    if (!session.llmSummary) {
+      return (
+        <p className="text-xs text-muted-foreground">
+          Summary {session.llmSummaryStatus || "not available"}
+          {session.llmSummaryError ? `: ${session.llmSummaryError}` : ""}
+        </p>
+      );
+    }
+
+    return (
+      <div className="flex flex-col gap-3">
+        <div>
+          <h4 className="text-sm font-semibold">{session.llmSummary.headline}</h4>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            {session.llmSummary.summary}
+          </p>
+        </div>
+
+        {!compact && (
+          <>
+            <div>
+              <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                Observations
+              </div>
+              <ul className="list-disc space-y-1 pl-4 text-xs text-muted-foreground">
+                {session.llmSummary.keyObservations.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </div>
+
+            <div className="grid gap-3 text-xs text-muted-foreground">
+              <div>
+                <span className="font-semibold text-foreground">HR zones: </span>
+                {session.llmSummary.heartRateZoneAssessment}
+              </div>
+              <div>
+                <span className="font-semibold text-foreground">Load: </span>
+                {session.llmSummary.trainingLoadAssessment}
+              </div>
+              {session.llmSummary.riderCommentsReflection && (
+                <div>
+                  <span className="font-semibold text-foreground">Rider notes: </span>
+                  {session.llmSummary.riderCommentsReflection}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                Next Focus
+              </div>
+              <ul className="list-disc space-y-1 pl-4 text-xs text-muted-foreground">
+                {session.llmSummary.suggestedNextFocus.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  };
+
   return (
     <main className="flex min-h-svh p-6">
       {/* Left Column - Controls & Telemetry */}
@@ -1202,6 +953,26 @@ export default function App() {
         {/* Header with Settings */}
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold">Workout Controller</h1>
+          <Dialog open={isSavedSummaryOpen} onOpenChange={setIsSavedSummaryOpen}>
+            <DialogContent className="sm:max-w-xl max-h-[85vh] overflow-y-auto rounded-md">
+              <DialogHeader>
+                <DialogTitle>Session Saved</DialogTitle>
+                <DialogDescription>
+                  {savedSummarySession?.workoutName || "Ride summary"}
+                </DialogDescription>
+              </DialogHeader>
+              {savedSummarySession && (
+                <div className="rounded-md border bg-muted/20 p-4">
+                  {renderRideSummary(savedSummarySession)}
+                </div>
+              )}
+              <DialogFooter>
+                <Button onClick={() => setIsSavedSummaryOpen(false)}>
+                  Done
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
           <Dialog open={isSettingsOpen} onOpenChange={handleSettingsOpenChange}>
             <DialogTrigger asChild>
               <Button variant="outline" size="icon" aria-label="Open rider settings">
@@ -1593,7 +1364,7 @@ export default function App() {
               <div className="flex-1 space-y-2 overflow-y-auto p-3">
                 {liveCoachMessages.length === 0 ? (
                   <div className="py-8 text-center text-xs text-muted-foreground">
-                    Ask the live coach by text or record an audio note.
+                    Ask the live coach by text.
                   </div>
                 ) : (
                   liveCoachMessages.map((message) => (
@@ -1612,7 +1383,6 @@ export default function App() {
                       >
                         <div className="mb-1 flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
                           <span>{message.role === "user" ? "You" : "Live Coach"}</span>
-                          {message.kind === "audio" && <Mic className="h-3 w-3" />}
                           {message.command && <span>{message.command}</span>}
                         </div>
                         <div>{message.text}</div>
@@ -1634,15 +1404,15 @@ export default function App() {
                     }}
                     placeholder="Ask: did you change power, make it easier, hold this..."
                     className="min-w-0 flex-1 rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
-                    disabled={riderVoiceFeedback.status === "sending"}
+                    disabled={liveCoachSending}
                   />
                   <Button
                     type="button"
                     size="sm"
                     onClick={sendLiveCoachText}
-                    disabled={!liveCoachInput.trim() || riderVoiceFeedback.status === "sending"}
+                    disabled={!liveCoachInput.trim() || liveCoachSending}
                   >
-                    {riderVoiceFeedback.status === "sending" ? (
+                    {liveCoachSending ? (
                       <LoaderCircle className="animate-spin" />
                     ) : (
                       "Send"
@@ -1650,133 +1420,6 @@ export default function App() {
                   </Button>
                 </div>
               </div>
-            </div>
-
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={connectionState !== "connected" || coachCheckState.status === "pending"}
-              onClick={requestCoachCheck}
-            >
-              {coachCheckState.status === "pending" && (
-                <LoaderCircle className="animate-spin" />
-              )}
-              Request Coach Check
-            </Button>
-
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={
-                !audioRecordingSupported ||
-                riderVoiceFeedback.status === "listening" ||
-                riderVoiceFeedback.status === "sending"
-              }
-              onClick={requestManualRiderVoiceFeedback}
-            >
-              <Mic />
-              Record Rider Note
-            </Button>
-
-            <div
-              className={`rounded-md border p-3 text-xs ${
-                coachCheckState.status === "error"
-                  ? "border-red-500/30 bg-red-500/10 text-red-700"
-                  : coachCheckState.status === "sent"
-                    ? "border-green-500/30 bg-green-500/10 text-green-700"
-                    : coachCheckState.status === "skipped"
-                      ? "border-yellow-500/30 bg-yellow-500/10 text-yellow-700"
-                      : "bg-muted/20 text-muted-foreground"
-              }`}
-            >
-              <div className="flex items-center justify-between gap-3">
-                <span className="font-semibold">
-                  Coach check: {coachCheckState.status}
-                </span>
-                {coachCheckState.target && (
-                  <span className="rounded-sm bg-background/60 px-2 py-0.5 text-[10px] font-bold uppercase">
-                    {coachCheckState.target}
-                  </span>
-                )}
-              </div>
-              <div className="mt-1">{coachCheckState.message}</div>
-              {coachCheckState.targetUrl && (
-                <div className="mt-1 break-all font-mono text-[10px] opacity-80">
-                  {coachCheckState.targetUrl}
-                </div>
-              )}
-              {coachCheckState.status === "sent" && (
-                <div className="mt-2 text-[11px] opacity-80">
-                  Forwarded means the hook endpoint accepted the request. The
-                  confirmed processing signal is a later agent message or command.
-                </div>
-              )}
-            </div>
-
-            <div
-              className={`rounded-md border p-3 text-xs ${
-                riderVoiceFeedback.status === "error" ||
-                riderVoiceFeedback.status === "unsupported"
-                  ? "border-red-500/30 bg-red-500/10 text-red-700"
-                  : riderVoiceFeedback.status === "sent"
-                    ? "border-green-500/30 bg-green-500/10 text-green-700"
-                    : riderVoiceFeedback.status === "listening" ||
-                        riderVoiceFeedback.status === "sending"
-                      ? "border-blue-500/30 bg-blue-500/10 text-blue-700"
-                      : "bg-muted/20 text-muted-foreground"
-              }`}
-            >
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 font-semibold">
-                    {riderVoiceFeedback.status === "listening" ? (
-                      <Mic className="h-3.5 w-3.5" />
-                    ) : (
-                      <MicOff className="h-3.5 w-3.5" />
-                    )}
-                    Rider voice: {riderVoiceFeedback.status}
-                  </div>
-                  {riderVoiceFeedback.prompt && (
-                    <div className="mt-1">{riderVoiceFeedback.prompt}</div>
-                  )}
-                </div>
-                {riderVoiceFeedback.status === "listening" && (
-                  <span className="rounded-sm bg-background/60 px-2 py-0.5 text-[10px] font-bold">
-                    {riderVoiceFeedback.remainingSeconds}s
-                  </span>
-                )}
-                {riderVoiceFeedback.target && (
-                  <span className="rounded-sm bg-background/60 px-2 py-0.5 text-[10px] font-bold uppercase">
-                    {riderVoiceFeedback.target}
-                  </span>
-                )}
-              </div>
-              <div className="mt-1">{riderVoiceFeedback.message}</div>
-              {riderVoiceFeedback.audioNote && (
-                <div className="mt-2 rounded-sm bg-background/60 p-2 text-[11px]">
-                  {riderVoiceFeedback.audioNote}
-                </div>
-              )}
-              {riderVoiceFeedback.status === "listening" && (
-                <div className="mt-2 flex gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="xs"
-                    onClick={stopRiderVoiceFeedback}
-                  >
-                    Send Now
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="xs"
-                    onClick={cancelRiderVoiceFeedback}
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              )}
             </div>
 
             <div className="flex flex-col gap-2">
@@ -1830,7 +1473,9 @@ export default function App() {
               <div className="p-3 border rounded-md bg-muted/10 border-dashed flex flex-col gap-2">
                 <div className="flex justify-between items-center">
                   <span className="font-semibold text-xs">Unsaved Session</span>
-                  <span className="text-[10px] text-muted-foreground">{clientRef.current.samples.length} samples</span>
+                  <span className="text-[10px] text-muted-foreground">
+                    {isSavingSession ? "Saving summary..." : `${clientRef.current.samples.length} samples`}
+                  </span>
                 </div>
                 <Button onClick={exportCsv} variant="outline" size="sm" className="w-full h-7 text-xs">
                   Export Temporary CSV
@@ -1877,6 +1522,35 @@ export default function App() {
                     </div>
                   </div>
 
+                  {session.riderComments && (
+                    <p className="rounded-sm bg-muted/30 px-2 py-1 text-[10px] text-muted-foreground">
+                      {session.riderComments}
+                    </p>
+                  )}
+
+                  {session.llmSummary && (
+                    <div className="rounded-sm border bg-muted/20 p-2">
+                      <div className="mb-1 font-bold uppercase tracking-wider text-muted-foreground">
+                        AI Summary
+                      </div>
+                      {renderRideSummary(session, true)}
+                      <details className="mt-2">
+                        <summary className="cursor-pointer text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                          More
+                        </summary>
+                        <div className="mt-2 border-t pt-2">
+                          {renderRideSummary(session)}
+                        </div>
+                      </details>
+                    </div>
+                  )}
+
+                  {!session.llmSummary && session.llmSummaryStatus && (
+                    <p className="text-[10px] text-muted-foreground">
+                      Summary {session.llmSummaryStatus}
+                    </p>
+                  )}
+
                   <Button 
                     onClick={() => handleExportSession(session)} 
                     variant="secondary" 
@@ -1900,7 +1574,6 @@ export default function App() {
            onPowerTargetChange={applyTargetPower}
            onStopSession={handleStopSession}
            onWorkoutChange={(w) => activeWorkoutNameRef.current = w.name}
-           getPlanRefreshSnapshot={getHookSnapshot}
            power={power}
            cadence={cadence}
            heartRate={heartRate}

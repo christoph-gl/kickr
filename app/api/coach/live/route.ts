@@ -27,7 +27,6 @@ const LiveCoachActionSchema = z.object({
     "send_message",
     "set_erg_watts",
     "set_resistance",
-    "request_rider_voice_feedback",
     "set_workout_plan",
   ]),
   text: z
@@ -42,10 +41,6 @@ const LiveCoachActionSchema = z.object({
     .number()
     .optional()
     .describe("Resistance percent from 0 to 100 when action is set_resistance."),
-  prompt: z
-    .string()
-    .optional()
-    .describe("Short visible prompt for the browser mic window."),
   leadSeconds: z
     .number()
     .optional()
@@ -112,17 +107,6 @@ function toCommand(action: z.infer<typeof LiveCoachActionSchema>): AgentCommand 
       id: makeAgentCommandId(),
       type: "set_resistance",
       percent: clampNumber(action.percent, 0, 100),
-      reason,
-    };
-  }
-
-  if (action.action === "request_rider_voice_feedback") {
-    return {
-      id: makeAgentCommandId(),
-      type: "request_rider_voice_feedback",
-      prompt: action.prompt?.trim().slice(0, 120) || "How does this effort feel?",
-      durationSeconds: 10,
-      transcriptionMode: "browser",
       reason,
     };
   }
@@ -309,28 +293,7 @@ function isLikelyWorkoutPlanEdit(riderText: string, snapshot: ReturnType<typeof 
 
 export async function POST(request: Request) {
   const startedAt = Date.now();
-  const requestContentType = request.headers.get("content-type") || "";
-  let body: Record<string, unknown>;
-  let audioFile:
-    | { data: Uint8Array; mediaType: string; filename: string }
-    | null = null;
-
-  if (requestContentType.includes("multipart/form-data")) {
-    const formData = await request.formData();
-    const payload = formData.get("payload");
-    body = typeof payload === "string" ? JSON.parse(payload) : {};
-
-    const audio = formData.get("audio");
-    if (audio instanceof File) {
-      audioFile = {
-        data: new Uint8Array(await audio.arrayBuffer()),
-        mediaType: audio.type || "audio/webm",
-        filename: audio.name || "rider-feedback.webm",
-      };
-    }
-  } else {
-    body = (await request.json()) as Record<string, unknown>;
-  }
+  const body = (await request.json()) as Record<string, unknown>;
 
   const snapshot = body?.snapshot ?? null;
   const intent = body?.intent === "adaptive_plan" ? "adaptive_plan" : "coach_check";
@@ -353,7 +316,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    if (!audioFile && isLikelyWorkoutPlanEdit(riderText, compactedSnapshot)) {
+    if (isLikelyWorkoutPlanEdit(riderText, compactedSnapshot)) {
       const result = await generateObject({
         model: liveCoachModel,
         temperature: 0,
@@ -408,20 +371,9 @@ At most 30 blocks. At most 30 minutes total. Keep whole watts.`,
               },
               conversationHistory,
               riderText: riderText || null,
-              riderAudioIncluded: Boolean(audioFile),
               snapshot: compactedSnapshot,
             }),
           },
-          ...(audioFile
-            ? [
-                {
-                  type: "file" as const,
-                  data: audioFile.data,
-                  mediaType: audioFile.mediaType,
-                  filename: audioFile.filename,
-                },
-              ]
-            : []),
         ],
       },
     ];
@@ -440,11 +392,9 @@ Available executable actions:
 - set_resistance: immediately changes trainer resistance percent.
 - set_workout_plan: replaces the upcoming workout track after leadSeconds.
 - send_message: rider-facing text only; it does not change trainer load.
-- request_rider_voice_feedback: opens a short browser mic window.
 Do not use send_message when the rider clearly asks to change watts or resistance and the snapshot says the trainer is connected.
 For coach_check without a specific rider request, prefer a short rider-facing cue under 12 words unless telemetry clearly calls for ERG or resistance adjustment.
 When rider text is included, treat it as the latest chat message from the rider.
-When rider audio is included, listen to the audio directly. If the rider asks for harder, easier, more watts, fewer watts, increase, decrease, too easy, or too hard, return an appropriate set_erg_watts or set_resistance action.
 Use set_workout_plan for requests that mention the workout, track, plan, remaining work, rest of workout, next N minutes, compressing duration, stretching duration, or scaling effort over time.
 snapshot.remainingWorkout.remainingBlocks is the source of truth for the remaining track. It starts at the rider's current point with offsetSeconds 0 and includes durationSeconds and targetPower for each block.
 For "decrease effort 10% for the rest of the workout", preserve the remaining block durations and return each targetPower multiplied by 0.9, rounded to whole watts.
@@ -455,7 +405,7 @@ set_workout_plan accepts at most 30 blocks and at most 30 minutes total. If the 
 Use leadSeconds 0 to 5 for rider-requested changes so the UI reflects the new plan immediately or near-immediately.
 If intent is adaptive_plan, return set_workout_plan with 5 to 10 blocks covering roughly the requested horizonSeconds. The plan should usually change target watts when telemetry supports a change, not merely describe one.
 Never mention implementation details, APIs, agents, hooks, or JSON to the rider.
-Use rider audio when present. If the rider reports pain, dizziness, chest pain, or wants to stop, lower intensity or stop escalating and send a safety-first cue.`,
+If the rider reports pain, dizziness, chest pain, or wants to stop, lower intensity or stop escalating and send a safety-first cue.`,
       messages: userContent,
     });
 

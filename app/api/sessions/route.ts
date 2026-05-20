@@ -2,9 +2,11 @@ import { NextResponse } from "next/server";
 import type { RideSession } from "@/lib/sessions";
 import {
   deleteRideSessionById,
+  getRiderProfileFromDb,
   insertRideSession,
   listRideSessions,
 } from "@/lib/db";
+import { summarizeRideSession } from "@/lib/ride-summary";
 
 export const dynamic = "force-dynamic";
 
@@ -24,8 +26,19 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid session payload" }, { status: 400 });
     }
 
-    insertRideSession(session);
-    return NextResponse.json({ success: true });
+    const summaryResult = await summarizeRideSession({
+      session,
+      riderProfile: getRiderProfileFromDb(),
+    });
+    const enrichedSession: RideSession = {
+      ...session,
+      llmSummary: summaryResult.summary,
+      llmSummaryStatus: summaryResult.status,
+      llmSummaryError: summaryResult.error,
+    };
+
+    insertRideSession(enrichedSession);
+    return NextResponse.json({ success: true, session: enrichedSession });
   } catch (error) {
     console.error("Failed to save ride session:", error);
     return NextResponse.json({ error: "Failed to save session" }, { status: 500 });

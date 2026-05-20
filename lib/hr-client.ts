@@ -16,7 +16,8 @@ export class HeartRateClient {
     }
 
     this.device = await navigator.bluetooth.requestDevice({
-      filters: [{ services: [HEART_RATE_SERVICE] }],
+      acceptAllDevices: true,
+      optionalServices: [HEART_RATE_SERVICE],
     });
 
     this.device.addEventListener("gattserverdisconnected", () => {
@@ -25,7 +26,15 @@ export class HeartRateClient {
     });
 
     this.server = await this.device.gatt!.connect();
-    const service = await this.server.getPrimaryService(HEART_RATE_SERVICE);
+    let service: BluetoothRemoteGATTService;
+    try {
+      service = await this.server.getPrimaryService(HEART_RATE_SERVICE);
+    } catch {
+      this.device.gatt?.disconnect();
+      throw new Error(
+        `Selected device "${this.device.name || "Unknown device"}" does not expose the Heart Rate service. Choose your HRM from the Bluetooth picker.`
+      );
+    }
     this.measurement = await service.getCharacteristic(HEART_RATE_MEASUREMENT);
 
     await this.measurement.startNotifications();

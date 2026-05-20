@@ -9,22 +9,48 @@ export type SessionMetrics = {
   avgCadence?: number;
 };
 
+export type RideLlmSummary = {
+  headline: string;
+  summary: string;
+  keyObservations: string[];
+  heartRateZoneAssessment: string;
+  riderCommentsReflection?: string;
+  trainingLoadAssessment: string;
+  dataQualityNotes: string[];
+  suggestedNextFocus: string[];
+  memoryCandidate: string;
+};
+
 export type RideSession = {
   id: string;
   workoutName: string;
   timestamp: number;
   samples: BikeSample[];
   metrics: SessionMetrics;
+  riderComments?: string;
+  llmSummary?: RideLlmSummary;
+  llmSummaryStatus?: "skipped" | "generated" | "failed";
+  llmSummaryError?: string;
 };
 
-export async function saveRideSession(session: RideSession) {
-  if (typeof window === "undefined") return;
+export async function saveRideSession(session: RideSession): Promise<RideSession> {
+  if (typeof window === "undefined") return session;
   try {
-    await fetch("/api/sessions", {
+    const res = await fetch("/api/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(session),
     });
+    if (!res.ok) throw new Error("Failed to save session");
+    const data = await res.json();
+    const savedSession = data.session && typeof data.session === "object"
+      ? data.session as RideSession
+      : session;
+
+    const sessions = getLocalRideSessions();
+    sessions.unshift(savedSession); // Newest first
+    localStorage.setItem("ride_history", JSON.stringify(sessions));
+    return savedSession;
   } catch (e) {
     console.error("Failed to save ride session via API:", e);
   }
@@ -32,6 +58,7 @@ export async function saveRideSession(session: RideSession) {
   const sessions = getLocalRideSessions();
   sessions.unshift(session); // Newest first
   localStorage.setItem("ride_history", JSON.stringify(sessions));
+  return session;
 }
 
 export function getLocalRideSessions(): RideSession[] {
@@ -39,7 +66,7 @@ export function getLocalRideSessions(): RideSession[] {
   try {
     const data = localStorage.getItem("ride_history");
     return data ? JSON.parse(data) : [];
-  } catch (e) {
+  } catch {
     return [];
   }
 }

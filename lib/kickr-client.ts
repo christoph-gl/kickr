@@ -30,7 +30,7 @@ export class KickrCore2Client {
     }
 
     this.device = await navigator.bluetooth.requestDevice({
-      filters: [{ services: [FTMS_SERVICE] }],
+      acceptAllDevices: true,
       optionalServices: [FTMS_SERVICE],
     });
 
@@ -40,7 +40,15 @@ export class KickrCore2Client {
     });
 
     this.server = await this.device.gatt!.connect();
-    const service = await this.server.getPrimaryService(FTMS_SERVICE);
+    let service: BluetoothRemoteGATTService;
+    try {
+      service = await this.server.getPrimaryService(FTMS_SERVICE);
+    } catch {
+      this.device.gatt?.disconnect();
+      throw new Error(
+        `Selected device "${this.device.name || "Unknown device"}" does not expose the FTMS trainer service. Choose your KICKR from the Bluetooth picker.`
+      );
+    }
 
     this.bikeData = await service.getCharacteristic(INDOOR_BIKE_DATA);
     this.control = await service.getCharacteristic(CONTROL_POINT);

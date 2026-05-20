@@ -11,6 +11,10 @@ type SessionRow = {
   workout_name: string;
   timestamp: number;
   metrics_json: string;
+  rider_comments: string | null;
+  llm_summary_json: string | null;
+  llm_summary_status: string | null;
+  llm_summary_error: string | null;
 };
 
 type SampleRow = {
@@ -28,6 +32,13 @@ type AgentCommandRow = {
 
 type AgentEventRow = {
   event_json: string;
+};
+
+type MonthlySummaryRow = {
+  month: string;
+  summary_json: string;
+  model: string | null;
+  generated_at: number;
 };
 
 type RiderProfileRow = {
@@ -61,6 +72,10 @@ export function getDb() {
         workout_name TEXT NOT NULL,
         timestamp INTEGER NOT NULL,
         metrics_json TEXT NOT NULL,
+        rider_comments TEXT,
+        llm_summary_json TEXT,
+        llm_summary_status TEXT,
+        llm_summary_error TEXT,
         created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
       );
 
@@ -114,11 +129,39 @@ export function getDb() {
         memory_summary TEXT,
         updated_at INTEGER NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS monthly_summaries (
+        month TEXT PRIMARY KEY,
+        summary_json TEXT NOT NULL,
+        model TEXT,
+        generated_at INTEGER NOT NULL
+      );
     `);
+    migrateRideSessionSummaries();
     seedRiderProfile();
   }
 
   return database;
+}
+
+function migrateRideSessionSummaries() {
+  const columns = database
+    ?.prepare("PRAGMA table_info(ride_sessions)")
+    .all() as { name: string }[] | undefined;
+  const names = new Set(columns?.map((column) => column.name) ?? []);
+
+  if (!names.has("rider_comments")) {
+    database?.exec("ALTER TABLE ride_sessions ADD COLUMN rider_comments TEXT");
+  }
+  if (!names.has("llm_summary_json")) {
+    database?.exec("ALTER TABLE ride_sessions ADD COLUMN llm_summary_json TEXT");
+  }
+  if (!names.has("llm_summary_status")) {
+    database?.exec("ALTER TABLE ride_sessions ADD COLUMN llm_summary_status TEXT");
+  }
+  if (!names.has("llm_summary_error")) {
+    database?.exec("ALTER TABLE ride_sessions ADD COLUMN llm_summary_error TEXT");
+  }
 }
 
 function seedRiderProfile() {
@@ -201,8 +244,17 @@ export function upsertRiderProfile(profile: RiderProfile) {
 export function insertRideSession(session: RideSession) {
   const db = getDb();
   const insertSession = db.prepare(`
-    INSERT OR REPLACE INTO ride_sessions (id, workout_name, timestamp, metrics_json)
-    VALUES (?, ?, ?, ?)
+    INSERT OR REPLACE INTO ride_sessions (
+      id,
+      workout_name,
+      timestamp,
+      metrics_json,
+      rider_comments,
+      llm_summary_json,
+      llm_summary_status,
+      llm_summary_error
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const deleteSamples = db.prepare("DELETE FROM ride_samples WHERE session_id = ?");
   const insertSample = db.prepare(`
@@ -224,7 +276,11 @@ export function insertRideSession(session: RideSession) {
       session.id,
       session.workoutName,
       session.timestamp,
-      JSON.stringify(session.metrics)
+      JSON.stringify(session.metrics),
+      session.riderComments?.trim() || null,
+      session.llmSummary ? JSON.stringify(session.llmSummary) : null,
+      session.llmSummaryStatus ?? null,
+      session.llmSummaryError ?? null
     );
     deleteSamples.run(session.id);
 
@@ -251,7 +307,10 @@ export function listRideSessions(): RideSession[] {
   const db = getDb();
   const sessions = db
     .prepare(
-      "SELECT id, workout_name, timestamp, metrics_json FROM ride_sessions ORDER BY timestamp DESC"
+      `SELECT id, workout_name, timestamp, metrics_json, rider_comments,
+              llm_summary_json, llm_summary_status, llm_summary_error
+       FROM ride_sessions
+       ORDER BY timestamp DESC`
     )
     .all() as SessionRow[];
 
@@ -271,12 +330,53 @@ export function listRideSessions(): RideSession[] {
       timestamp: session.timestamp,
       metrics: JSON.parse(session.metrics_json) as SessionMetrics,
       samples: samples.map(rowToBikeSample),
+      riderComments: session.rider_comments ?? undefined,
+      llmSummary: session.llm_summary_json
+        ? JSON.parse(session.llm_summary_json)
+        : undefined,
+      llmSummaryStatus:
+        session.llm_summary_status === "generated" ||
+        session.llm_summary_status === "failed" ||
+        session.llm_summary_status === "skipped"
+          ? session.llm_summary_status
+          : undefined,
+      llmSummaryError: session.llm_summary_error ?? undefined,
     };
   });
 }
 
 export function deleteRideSessionById(id: string) {
   getDb().prepare("DELETE FROM ride_sessions WHERE id = ?").run(id);
+}
+
+export function upsertMonthlySummary(month: string, summary: unknown, model?: string) {
+  getDb()
+    .prepare(
+      `INSERT INTO monthly_summaries (month, summary_json, model, generated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(month) DO UPDATE SET
+         summary_json = excluded.summary_json,
+         model = excluded.model,
+         generated_at = excluded.generated_at`
+    )
+    .run(month, JSON.stringify(summary), model ?? null, Date.now());
+}
+
+export function listMonthlySummaries() {
+  const rows = getDb()
+    .prepare(
+      `SELECT month, summary_json, model, generated_at
+       FROM monthly_summaries
+       ORDER BY month DESC`
+    )
+    .all() as MonthlySummaryRow[];
+
+  return rows.map((row) => ({
+    month: row.month,
+    summary: JSON.parse(row.summary_json),
+    model: row.model ?? undefined,
+    generatedAt: row.generated_at,
+  }));
 }
 
 export function insertAgentCommand(command: AgentCommand) {
