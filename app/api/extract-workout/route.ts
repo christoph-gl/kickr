@@ -33,17 +33,17 @@ export async function POST(request: Request) {
           content: [
             {
               type: "text",
-              text: `You are a cycling workout extractor for a 4DP / ERG mode chart.
+              text: `You are a cycling workout extractor for a power-profile / ERG mode chart.
 Extract the sequence of workout blocks from left to right.
-The chart usually has a white horizontal line which represents FTP (100% FTP).
+The chart usually has a white horizontal line which represents threshold power (100% threshold).
 Colors represent different reference metrics:
-- Blue bars reference FTP.
-- Yellow bars reference MAP.
-- Orange bars reference AC.
-- Pink bars reference NM.
+- Blue bars reference threshold power.
+- Yellow bars reference 5-minute power.
+- Orange bars reference 60-second power.
+- Pink bars reference 5-second power.
 
 Estimate the duration in seconds based on the width of the bars. The total duration is usually given (e.g., 54:21) or implied.
-Estimate the intensity percentage based on the height relative to the reference metric. For example, if a blue bar is exactly on the white FTP line, it is 100% FTP.`,
+Estimate the intensity percentage based on the height relative to the reference metric. For example, if a blue bar is exactly on the white threshold line, it is 100% threshold.`,
             },
             {
               type: "image",
@@ -60,7 +60,7 @@ Estimate the intensity percentage based on the height relative to the reference 
         blocks: z.array(
           z.object({
             duration_seconds: z.number(),
-            zone: z.string().describe("e.g., Recovery, Tempo, AC, MAP, NM"),
+            zone: z.string().describe("e.g., Recovery, Tempo, P60, P300, P5"),
             intensity_percent: z
               .number()
               .describe(

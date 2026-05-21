@@ -7,7 +7,8 @@ import {
   WorkoutBlock,
   parseLLMWorkout,
   saveWorkout,
-  getSavedWorkouts,
+  deleteWorkout,
+  getWorkoutLibrary,
   updateWorkout,
   parseZwoWorkout,
   calculateWorkoutMetrics,
@@ -17,6 +18,7 @@ import {
 } from "@/lib/workouts";
 import { WorkoutChart } from "./workout-chart";
 import { Button } from "./ui/button";
+import { Trash2 } from "lucide-react";
 import { RIDER_PROFILE, type RiderProfile } from "@/lib/profile";
 import { audioService } from "@/lib/audio";
 import {
@@ -124,6 +126,7 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
   const [isBuildingWorkout, setIsBuildingWorkout] = useState(false);
   const [unsavedBuiltWorkoutId, setUnsavedBuiltWorkoutId] = useState<string | null>(null);
   const [isSavingBuiltWorkout, setIsSavingBuiltWorkout] = useState(false);
+  const [deletingWorkoutId, setDeletingWorkoutId] = useState<string | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [liveCoachFeedback, setLiveCoachFeedback] = useState<string | null>(null);
   const [liveCoachDetail, setLiveCoachDetail] = useState<string | null>(null);
@@ -349,13 +352,20 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
 
   useEffect(() => {
     async function loadSaved() {
-      const saved = await getSavedWorkouts();
-      if (saved.length > 0) {
-        setAllWorkouts([...WORKOUTS, ...saved]);
+      const { savedWorkouts, deletedWorkoutIds } = await getWorkoutLibrary();
+      const deletedIds = new Set(deletedWorkoutIds);
+      const visibleWorkouts = [
+        ...WORKOUTS.filter((savedWorkout) => !deletedIds.has(savedWorkout.id)),
+        ...savedWorkouts.filter((savedWorkout) => !deletedIds.has(savedWorkout.id)),
+      ];
+      setAllWorkouts(visibleWorkouts);
+
+      if (!visibleWorkouts.some((savedWorkout) => savedWorkout.id === workout.id)) {
+        setWorkout(visibleWorkouts[0] ?? ADAPTIVE_FREERIDE);
       }
     }
     loadSaved();
-  }, []);
+  }, [workout.id]);
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -577,6 +587,31 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
       alert(err instanceof Error ? err.message : String(err));
     } finally {
       setIsSavingBuiltWorkout(false);
+    }
+  };
+
+  const handleDeleteWorkout = async (target: Workout) => {
+    if (deletingWorkoutId) return;
+    const confirmed = window.confirm(`Delete "${target.name}"?`);
+    if (!confirmed) return;
+
+    setDeletingWorkoutId(target.id);
+    try {
+      await deleteWorkout(target.id);
+      const remainingWorkouts = allWorkouts.filter((savedWorkout) => savedWorkout.id !== target.id);
+      setAllWorkouts(remainingWorkouts);
+
+      if (workout.id === target.id) {
+        const fallback = remainingWorkouts[0] ?? ADAPTIVE_FREERIDE;
+        setWorkout(fallback);
+        setUnsavedBuiltWorkoutId(null);
+        setBuilderRationale(null);
+        handleStop();
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setDeletingWorkoutId(null);
     }
   };
 
@@ -961,10 +996,12 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
                 </div>
               </DialogHeader>
 
-              <div className="flex-1 overflow-y-auto p-6 pt-2 flex flex-col gap-3">                {allWorkouts.map((w) => {
+              <div className="flex-1 overflow-y-auto p-6 pt-2 flex flex-col gap-3">
+                {allWorkouts.map((w) => {
                   const metrics = calculateWorkoutMetrics(w, riderProfile.fourDP.ftp);
                   const duration = w.blocks.reduce((acc, b) => acc + b.durationSeconds, 0);
                   const isActive = workout.id === w.id;
+                  const isDeleting = deletingWorkoutId === w.id;
 
                   return (
                     <div 
@@ -980,7 +1017,7 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
                         setIsPickerOpen(false);
                       }}
                     >
-                      <div className="flex justify-between items-start">
+                      <div className="flex justify-between items-start gap-3">
                         <div className="flex flex-col gap-0.5">
                           <span className={`font-bold text-base ${isActive ? "text-primary" : ""}`}>
                             {w.name}
@@ -1000,11 +1037,28 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
                             </span>
                           </div>
                         </div>
-                        {isActive && (
-                          <div className="px-2 py-0.5 bg-primary text-[10px] text-primary-foreground font-bold rounded-full uppercase tracking-wider">
-                            Active
-                          </div>
-                        )}
+                        <div className="flex shrink-0 items-center gap-2">
+                          {isActive && (
+                            <div className="px-2 py-0.5 bg-primary text-[10px] text-primary-foreground font-bold rounded-full uppercase tracking-wider">
+                              Active
+                            </div>
+                          )}
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-sm"
+                            disabled={isPlaying || isDeleting}
+                            title="Delete workout"
+                            aria-label={`Delete ${w.name}`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void handleDeleteWorkout(w);
+                            }}
+                            className="text-muted-foreground opacity-100 hover:bg-destructive/10 hover:text-destructive sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+                          >
+                            <Trash2 />
+                          </Button>
+                        </div>
                       </div>
                       <WorkoutChart workout={w} progressSeconds={0} preview={true} riderProfile={riderProfile} />
                     </div>

@@ -10,14 +10,13 @@ If the user gives only the public GitHub URL, or says “try this again”, “i
 2. Install dependencies with `npm install`.
 3. Start the KICKR app locally.
 4. Verify `GET /api/rider`.
-5. Install the lean Hermes/OpenClaw skill from `.agents/skills/kickr-local-coach/dist/` if the user is using an external coach agent.
-6. Guide the user through browser Bluetooth connection and optional hook/env wiring.
+5. Install the lean Hermes/OpenClaw skill from `.agents/skills/kickr-local-coach/dist/` only if the user wants an optional external fitness-tracking agent.
+6. Guide the user through browser Bluetooth connection. If installing an external agent, have it ask for age, broad fitness level, goals, and constraints.
 
-Do not ask “implement what?” for this bootstrap request. Ask a narrow question only when needed, such as where to clone the repo or whether the user wants Hermes or OpenClaw hooks.
+Do not ask “implement what?” for this bootstrap request. Ask a narrow question only when needed, such as where to clone the repo or whether the user wants the optional Hermes/OpenClaw fitness-tracking helper.
 
 Fresh setup footguns:
 - Do not run `cp .env.example .env.local`; `.env.example` contains optional placeholders, not runnable secrets.
-- Do not set both Hermes and OpenClaw hook backends. Hermes wins if both are present.
 - Do not append `-- --turbopack` to `npm run dev`; the script already includes Turbopack.
 - Do not decide the server failed after a short wait. First Next.js compile can take 30-90 seconds.
 - Probe `http://localhost:3000/api/rider` or `https://kickr.localhost/api/rider`, not just the root page.
@@ -67,7 +66,7 @@ Communication relies heavily on the **Web Bluetooth API** (`navigator.bluetooth`
    - For preplanned workouts, the current UI uses this lane as feedback-only. At Play from `0:00`, it sends `intent: "ride_start_summary"` with rider profile, HR zones, and remaining workout blocks. Every five minutes while playing, it sends `intent: "periodic_ride_check"` with rider profile, HR zones, latest sample, ride-so-far averages, 30-second telemetry snapshots, and the remaining workout.
    - For `ride_start_summary` and `periodic_ride_check`, the model is instructed to return `send_message` only, and the client does not apply trainer/workout commands from these periodic checks. Preplanned workout ERG targets remain owned by the workout timeline.
    - Experimental spoken feedback uses `POST /api/coach/tts`. Keep xAI/Grok credentials server-side (`XAI_API_KEY`, `GROK_TTS_API_KEY`, or `VOICE_CREATION_API_KEY`). The route wraps text as `<loud>...</loud>`, calls xAI TTS with voice `sal` by default, and returns MP3 audio. TTS failure must not block ride control or text feedback.
-   - External agents are better suited for pre-ride planning, route/workout creation, post-ride summaries, and rider-profile/memory updates.
+   - External agents should not own live coaching or trainer control. They are optional helpers for post-ride fitness tracking and rider-profile/memory updates from completed ride summaries.
 7. **Workout Builder and Post-Ride Summary LLM Lanes:**
    - `POST /api/workout-builder` creates an ERG workout from rider instructions, current Europe/Berlin date/time, the SQLite rider profile, and the last five saved ride summaries. It returns a draft workout and rationale; it must not persist the workout automatically. The browser shows **Save Track** for drafts the rider wants to keep permanently in `workouts/`.
    - Configure `WORKOUT_BUILDER_API_KEY` / `WORKOUT_BUILDER_MODEL` for this lane. It falls back through `RIDE_SUMMARY_API_KEY`, `LIVE_COACH_API_KEY`, `LLM_CALLS_API_KEY`, and `AI_GATEWAY_API_KEY`.
@@ -81,19 +80,19 @@ Communication relies heavily on the **Web Bluetooth API** (`navigator.bluetooth`
 
 ## Local Agent / LLM Control Architecture
 
-The architecture intentionally does **not** expose an MCP server. The browser remains the Bluetooth owner and the Next.js app exposes small local HTTP endpoints for local agents like OpenClaw or Hermes.
+The architecture intentionally does **not** expose an MCP server. The browser remains the Bluetooth owner. The Next.js app exposes small local HTTP endpoints that optional external agents can use for rider profile and completed ride history.
 
 ### Three layers, three audiences
 
 | Layer | Lives in | Audience | Read when |
 | --- | --- | --- | --- |
 | **App internals** (FTMS, SQLite, Web Bluetooth, workout player) | `AGENTS.md`, `lib/`, `components/` | Someone editing the KICKR app itself | Code changes |
-| **One-time setup** (env vars, gateway config, smoke tests) | `.agents/skills/kickr-local-coach/references/*.md` | Agent doing first-time install | Once per machine, plus troubleshooting |
-| **Operating contract** (endpoints, command shapes, hook payloads, coaching loop) | `.agents/skills/kickr-local-coach/dist/agent-skill.<agent>.md` | The running agent | Every coaching turn |
+| **One-time setup** (bootstrap, onboarding, smoke tests) | `.agents/skills/kickr-local-coach/INSTALL.md` and `references/api.md` | Agent doing first-time install | Once per machine, plus troubleshooting |
+| **Operating contract** (profile/session endpoints, tracking loop, memory rules) | `.agents/skills/kickr-local-coach/dist/agent-skill.<agent>.md` | The running agent | Every tracking turn |
 
 External agents are expected to **install** the lean per-agent skill from `.agents/skills/kickr-local-coach/dist/` into their own workspace once, then operate without re-reading this repo. Install flow: [`.agents/skills/kickr-local-coach/INSTALL.md`](.agents/skills/kickr-local-coach/INSTALL.md). Authoring guidance for the skill itself: `.agents/skills/kickr-local-coach/SKILL.md`. Each `dist/agent-skill.*.md` carries a `kickr-skill-version` line; bump it when the operating contract changes so installed copies can detect drift.
 
-Phase 1 is agent-only: do not edit the KICKR Next.js app; use the existing local APIs as a stable service.
+External-agent setup is agent-only: do not edit the KICKR Next.js app; use the existing local APIs as a stable service.
 
 ### Base URL
 
@@ -102,58 +101,24 @@ When the app is started with Portless, prefer the stable project URL `https://ki
 ### Browser Ownership
 - The browser tab owns Web Bluetooth and sends FTMS commands.
 - External agents should not attempt to talk directly to the trainer.
-- The older `/api/agent/commands` and `/api/agent/events` routes still exist server-side, but the current UI no longer shows the Agent Controller card or polls the command inbox during normal operation.
-- Do not document or build new behavior assuming a browser tab consumes `/api/agent/commands` unless you also add an explicit client surface for it.
+- The older `/api/agent/commands`, `/api/agent/events`, and hook routes may still exist server-side for compatibility experiments, but the current UI no longer shows the Agent Controller card or polls the command inbox during normal operation.
+- Do not document or build new external-agent behavior that controls trainer watts, routes, workouts, or live coaching unless the user explicitly asks to revive that architecture and you also add an explicit client surface for it.
 
-### Agent Command Endpoint
-- `POST /api/agent/commands` queues commands.
-- `GET /api/agent/commands` consumes queued commands for the browser tab.
-- `GET /api/agent/commands?consume=false` reads queued commands without consuming.
-- If `AGENT_COMMAND_TOKEN` is set, external callers must send `Authorization: Bearer <token>`. Same-origin browser calls are allowed so the app can keep polling.
-
-Supported command payloads:
-
-```json
-{"type":"set_erg_watts","watts":220,"reason":"HR is steady"}
-{"type":"set_resistance","percent":35,"reason":"Free ride push"}
-{"type":"send_message","text":"Hold this effort for two more minutes"}
-{"type":"send_message","text":"Text only; do not speak this one","speak":false}
-{"type":"request_rider_voice_feedback","prompt":"How does this effort feel?","durationSeconds":10}
-{"type":"start_trainer"}
-{"type":"stop_trainer"}
-```
-
-Use `set_erg_watts` and `set_resistance` as the canonical trainer-control commands. The app accepts `{"type":"set_trainer_mode","mode":"erg","targetWatts":220}` and `{"type":"set_trainer_mode","mode":"resistance","percent":35}` as compatibility fallbacks, but fresh agents should not invent new command shapes.
-
-`request_rider_voice_feedback` is a short, visible rider mic window. For the in-app live coach lane, the browser records roughly 10 seconds of audio with `MediaRecorder` and sends it directly to the multimodal model instead of sending a speech transcript. Do not expect always-on listening.
-
-### Agent Event / Context Endpoints
-- `POST /api/agent/events` stores structured agent/ride events in SQLite.
-- `GET /api/agent/events?limit=200` returns recent agent events, newest first.
-- Ride snapshots include telemetry, active trainer mode, workout name, sample count, and the current `riderProfile`.
-- After queueing a trainer command, verify a later `ride_snapshot.activeTrainerMode` changed as expected, not only that the command was queued.
-- `GET /api/sessions` returns saved ride sessions with samples and metrics.
+### External Agent Tracking Endpoints
 - `GET /api/rider` returns the current rider profile.
-- `PUT /api/rider` updates the rider profile.
+- `PUT /api/rider` updates the rider profile. Preserve fields you are not changing.
+- `GET /api/sessions` returns saved ride sessions with samples, metrics, rider comments, and in-app LLM summaries.
+- `GET /api/monthly-summaries` returns rollups when available.
+- If `AGENT_COMMAND_TOKEN` is set, external callers should send `Authorization: Bearer <token>`.
 
-### Live Coaching vs Outbound Agent Wakeups
+On first install, an external agent should ask the rider for age, broad fitness level, cycling background, goals, and constraints. Store numeric age in `age` and qualitative fitness context in `memorySummary`. Store weight, gender, cTHR, or 4DP values only when the rider explicitly provides them.
+
+Completed rides may include `llmSummaryStatus` and `llmSummary`. Agents should prefer those app-generated summaries over raw telemetry when helping the rider update personal fitness tracking or proposing a `memorySummary` update.
+
+### Live Coaching Boundary
 - Use `POST /api/coach/live` for in-ride, latency-sensitive app feedback. For preplanned workouts, `ride_start_summary` and `periodic_ride_check` are text-only and must not adapt the workout or trainer load.
-- Keep Hermes/OpenClaw for deeper asynchronous work: initial route/workout planning, creating a workout from scratch, end-of-ride ingestion, and rider profile/memory adaptation.
-
-### Outbound Agent Wakeups
-- Browser/client code calls `POST /api/agent/hooks/trigger`.
-- The route picks an adapter from server-only env vars. Set exactly one backend:
-  - **Hermes** (preferred when Hermes API Server is enabled): `HERMES_API_URL`, `HERMES_API_KEY`, `HERMES_KICKR_SESSION_ID`. The route forwards to `${HERMES_API_URL}/v1/runs` with `Authorization: Bearer ${HERMES_API_KEY}` and a body of `{session_id, input, metadata}` where `metadata` carries the full KICKR payload.
-  - **OpenClaw**: `OPENCLAW_HOOKS_URL`, `OPENCLAW_HOOKS_TOKEN`. The route forwards the KICKR payload to the mapped `/hooks/kickr` endpoint with `Authorization: Bearer ${OPENCLAW_HOOKS_TOKEN}`.
-- If both are set, Hermes takes precedence. If neither is set, the route returns `{skipped: true}` and never throws.
-- First supported wake events: `ride_started`, `ride_ended`, `rider_feedback`, manual `coach_check`. Prefer the live coach endpoint for rider feedback and manual coach checks during an active ride; keep these hook events for compatibility and non-urgent external-agent flows.
-- `/api/agent/hooks/trigger` can confirm that Next.js forwarded the wakeup to Hermes/OpenClaw and report the selected target, local target URL, HTTP status, and any response body/run id. It cannot universally prove the agent finished processing. Treat a later queued `send_message`, trainer command, or event as the processing confirmation.
-- Hook payloads include a compact `runtimeContract` with base URL, command endpoint, allowed command shapes, and fast-mode rules. The callback instruction is also embedded in the top-level `message` for OpenClaw mappings that only pass `message`, `event`, `sessionId`, and `snapshot`. Manual coach checks use `mode:"fast"` and include rolling telemetry plus rider profile essentials, so agents should not fetch repo/docs/history before giving a short cue.
-- For OpenClaw, prefer a stable hook session (`openclaw config set hooks.defaultSessionKey kickr-local-coach`) and allowlist only the local KICKR callback command, for example `curl -sS -X POST http://localhost:*/api/agent/commands*`.
-- `AGENT_CALLBACK_BASE_URL` can override the callback base URL when Hermes/OpenClaw cannot reach the URL inferred from the incoming request.
-- Keep hook tokens out of client components and client-imported modules.
-- Restart `next dev` after editing `.env.local`; Next.js does not pick up env changes via hot reload.
-- Do not add high-HR, cadence-collapse, or power-target-missed triggers until the basic hook round trip works.
+- Keep Hermes/OpenClaw out of live trainer control. External agents are for post-ride tracking, rider memory, and exporting completed ride results.
+- The legacy command and hook endpoints are not the default agent contract. Do not build new behavior around them unless the user explicitly asks to revive external-agent control.
 
 ### Rider Profile
 The rider profile is seeded from `DEFAULT_RIDER_PROFILE` and stored in SQLite. It currently includes:
@@ -165,13 +130,12 @@ The rider profile is seeded from `DEFAULT_RIDER_PROFILE` and stored in SQLite. I
 - `gender` (`male`, `female`, or unset)
 - `memorySummary`
 
-The settings cog in the app opens a modal for manual profile editing. Future LLM-generated ride summaries should update `memorySummary` or a future related table after a full ride, not during every telemetry snapshot.
+The settings cog in the app opens a modal for manual profile editing. External agents may propose `memorySummary` updates after full rides, especially using `llmSummary.memoryCandidate`, but should ask before writing.
 
 ### Important Future Agent Rules
-- Keep LLM decisions as structured commands. Do not put FTMS byte encoding in prompts or agent glue.
-- Store agent decisions and outcomes; this is the debugging trail for coaching behavior.
-- Avoid high-frequency external-agent loops. Use `/api/coach/live` for sparse in-ride LLM decisions and let the app handle real-time trainer execution.
-- Use `/api/rider`, `/api/sessions`, and `/api/agent/events` as the initial OpenClaw/Hermes context surface.
+- Do not put FTMS byte encoding in prompts or agent glue.
+- Avoid high-frequency external-agent loops. Use `/api/coach/live` for in-app ride feedback and let the app handle real-time trainer execution.
+- Use `/api/rider`, `/api/sessions`, and `/api/monthly-summaries` as the external-agent context surface.
 - Prefer adding new server routes or DB helpers over reading `.data/kickr.sqlite` directly from external scripts.
 
 ## UI/UX Rules
@@ -187,4 +151,4 @@ The settings cog in the app opens a modal for manual profile editing. Future LLM
 - **Workout Builder UI:** Create a drag-and-drop timeline UI where a user can manually construct custom workouts without needing to write JSON or import ZWO files.
 - **Live Telemetry Charting:** Use a charting library (like Recharts, which is compatible with shadcn/ui) to plot actual live Power/Cadence/HR data as the ride progresses, overlaying it on top of the planned workout chart.
 - **Save Workouts via Database:** Imported/saved workouts still use JSON files under `workouts/`; consider moving them behind SQLite later.
-- **OpenClaw/Hermes Integration:** Phase 1 (agent installs the skill, reads context, queues commands) and Phase 2 (KICKR app -> agent wakeups via the dual adapter route) are wired for asynchronous planning and post-ride work. Live in-ride coaching now belongs to `/api/coach/live`.
+- **OpenClaw/Hermes Integration:** External agents are now optional fitness-tracking helpers. They install the skill, read rider context and saved ride summaries, and help update personal tracking or rider memory. Live in-ride coaching belongs to `/api/coach/live`.

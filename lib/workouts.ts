@@ -125,7 +125,7 @@ export function calculateWorkoutMetrics(workout: Workout, ftp: number) {
   const totalSeconds = workout.blocks.reduce((acc, b) => acc + b.durationSeconds, 0);
   if (totalSeconds === 0) return { np: 0, iff: 0, tss: 0 };
 
-  let secData: number[] = [];
+  const secData: number[] = [];
   for (const b of workout.blocks) {
     for (let i = 0; i < b.durationSeconds; i++) {
       secData.push(b.targetPower);
@@ -179,6 +179,23 @@ export async function updateWorkout(workout: Workout) {
   }
 }
 
+export async function deleteWorkout(id: string) {
+  if (typeof window === "undefined") return;
+  try {
+    const res = await fetch(`/api/workouts?id=${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      throw new Error(data?.error || "Failed to delete workout");
+    }
+  } catch (e) {
+    console.error("Failed to delete workout via API:", e);
+    alert(e instanceof Error ? e.message : "Warning: Could not delete workout.");
+    throw e;
+  }
+}
+
 export async function getSavedWorkouts(): Promise<Workout[]> {
   if (typeof window === "undefined") return [];
   try {
@@ -188,6 +205,27 @@ export async function getSavedWorkouts(): Promise<Workout[]> {
   } catch (e) {
     console.error("Failed to fetch workouts from API:", e);
     return [];
+  }
+}
+
+export async function getWorkoutLibrary(): Promise<{
+  savedWorkouts: Workout[];
+  deletedWorkoutIds: string[];
+}> {
+  if (typeof window === "undefined") return { savedWorkouts: [], deletedWorkoutIds: [] };
+  try {
+    const res = await fetch("/api/workouts?includeDeleted=true");
+    if (!res.ok) return { savedWorkouts: [], deletedWorkoutIds: [] };
+    const data = await res.json();
+    return {
+      savedWorkouts: Array.isArray(data?.workouts) ? data.workouts : [],
+      deletedWorkoutIds: Array.isArray(data?.deletedWorkoutIds)
+        ? data.deletedWorkoutIds.filter((id: unknown): id is string => typeof id === "string")
+        : [],
+    };
+  } catch (e) {
+    console.error("Failed to fetch workout library from API:", e);
+    return { savedWorkouts: [], deletedWorkoutIds: [] };
   }
 }
 

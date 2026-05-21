@@ -156,7 +156,7 @@ export async function POST(req: Request) {
 
 Task:
 - Create one workout for today from the rider's request.
-- Use the rider's 4DP profile to choose safe target watts.
+- Use the rider's power profile to choose safe target watts.
 - Use the last 5 ride evaluations, dates, and current date/time to avoid stacking inappropriate intensity.
 - Prefer endurance/recovery when the request says endurance, easy, aerobic, or when recent ride summaries show high HR strain.
 - Output ERG blocks only: durationSeconds and targetPower.
@@ -164,8 +164,8 @@ Task:
 Rules:
 - Respect requested duration if provided. If vague, choose 30-60 minutes.
 - Include warmup and cooldown unless the ride is very short.
-- For endurance rides, keep most work around 55-75% FTP and avoid surprise intervals.
-- Use MAP/AC/NM sparingly and only when requested or sensible from recent context.
+- For endurance rides, keep most work around 55-75% threshold power and avoid surprise intervals.
+- Use P300/P60/P5-style efforts sparingly and only when requested or sensible from recent context.
 - Do not prescribe medical advice.
 - The final workout should be practical to ride indoors today.
 

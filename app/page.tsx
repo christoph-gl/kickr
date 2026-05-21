@@ -1,10 +1,10 @@
 "use client";
 
 import { useRef, useState, useEffect } from "react";
-import { KickrCore2Client } from "@/lib/kickr-client";
+import { BikeSample, KickrCore2Client } from "@/lib/kickr-client";
 import { HeartRateClient } from "@/lib/hr-client";
 import { Button } from "@/components/ui/button";
-import { Cog, History, Trash2 } from "lucide-react";
+import { Cog, History, Info, Trash2 } from "lucide-react";
 import { getRiderProfile, RIDER_PROFILE, saveRiderProfile, type RiderProfile } from "@/lib/profile";
 import { WorkoutPlayer, type WorkoutPlayerHandle } from "@/components/workout-player";
 import { 
@@ -12,7 +12,8 @@ import {
   saveRideSession, 
   getSavedRideSessions, 
   deleteRideSession, 
-  calculateActualMetrics 
+  calculateActualMetrics,
+  type SessionMetrics,
 } from "@/lib/sessions";
 import {
   Dialog,
@@ -27,6 +28,38 @@ import {
 type ConnectionState = "disconnected" | "connecting" | "connected";
 type TrainerMode = "erg" | "resistance";
 type ActiveTrainerMode = { type: "none" } | { type: "erg", watts: number } | { type: "resistance", level: number };
+
+const POWER_PROFILE_FIELDS = [
+  {
+    key: "nm",
+    label: "P5",
+    duration: "5 sec",
+    description: "Best short sprint power over about 5 seconds.",
+  },
+  {
+    key: "ac",
+    label: "P60",
+    duration: "60 sec",
+    description: "Best hard one-minute power for short anaerobic efforts.",
+  },
+  {
+    key: "map",
+    label: "P300",
+    duration: "5 min",
+    description: "Best five-minute aerobic power used to scale harder intervals.",
+  },
+  {
+    key: "ftp",
+    label: "Threshold Power",
+    duration: "sustained",
+    description: "Estimated sustainable threshold power used for workout metrics and pacing.",
+  },
+] as const satisfies readonly {
+  key: keyof RiderProfile["fourDP"];
+  label: string;
+  duration: string;
+  description: string;
+}[];
 
 export default function App() {
   const clientRef = useRef(new KickrCore2Client());
@@ -60,7 +93,7 @@ export default function App() {
   const currentSessionFilenameRef = useRef<string | null>(null);
   const activeWorkoutNameRef = useRef<string>("Manual Ride");
   const workoutPlayerRef = useRef<WorkoutPlayerHandle | null>(null);
-  const unsavedSamplesRef = useRef<any[]>([]);
+  const unsavedSamplesRef = useRef<BikeSample[]>([]);
 
   useEffect(() => {
     getSavedRideSessions().then(setSessions);
@@ -71,7 +104,7 @@ export default function App() {
 
   }, []);
 
-  const logSamples = async (samples: any[], isNew: boolean, finalMetrics?: any) => {
+  const logSamples = async (samples: BikeSample[], isNew: boolean, finalMetrics?: SessionMetrics) => {
     if (!currentSessionFilenameRef.current) return;
     try {
       await fetch("/api/log-ride", {
@@ -592,17 +625,16 @@ export default function App() {
               <div className="flex flex-col gap-6 mt-4">
                 <div className="flex flex-col border rounded-md bg-card overflow-hidden">
                   <div className="p-4 bg-muted/20 border-b">
-                    <h3 className="font-semibold text-base">Four Dimensional Power (4DP®) Profile</h3>
+                    <h3 className="font-semibold text-base">Power Profile</h3>
                   </div>
                   <div className="grid grid-cols-2 gap-4 p-4 sm:grid-cols-4">
-                    {([
-                      ["nm", "NM (5s)"],
-                      ["ac", "AC (1m)"],
-                      ["map", "MAP (5m)"],
-                      ["ftp", "FTP (20m)"],
-                    ] as const).map(([key, label]) => (
-                      <label key={key} className={labelClass}>
-                        <span>{label}</span>
+                    {POWER_PROFILE_FIELDS.map(({ key, label, duration, description }) => (
+                      <label key={key} className={labelClass} title={description}>
+                        <span className="flex items-center gap-1">
+                          <span>{label}</span>
+                          <Info className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+                        </span>
+                        <span className="text-[10px] font-normal text-muted-foreground">{duration}</span>
                         <input
                           type="number"
                           min="0"

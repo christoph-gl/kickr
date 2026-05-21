@@ -2,6 +2,15 @@ import { NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
 
+type LoggedBikeSample = {
+  timestamp: number;
+  powerW?: number;
+  cadenceRpm?: number;
+  speedKph?: number;
+  resistance?: number;
+  heartRateBpm?: number;
+};
+
 export async function POST(req: Request) {
   try {
     const { filename, samples, isNew, metadata, finalMetrics } = await req.json();
@@ -17,13 +26,13 @@ export async function POST(req: Request) {
 
     if (isNew && metadata) {
       content += `# Workout: ${metadata.workoutName}\n`;
-      content += `# Profile: NM=${metadata.profile.nm}, AC=${metadata.profile.ac}, MAP=${metadata.profile.map}, FTP=${metadata.profile.ftp}\n`;
+      content += `# Power Profile: P5=${metadata.profile.nm}, P60=${metadata.profile.ac}, P300=${metadata.profile.map}, Threshold=${metadata.profile.ftp}\n`;
       content += `# Date: ${new Date().toISOString()}\n`;
       content += "timestamp,powerW,cadenceRpm,speedKph,resistance,heartRateBpm\n";
     }
 
     if (Array.isArray(samples) && samples.length > 0) {
-      content += samples.map((s: any) => {
+      content += (samples as LoggedBikeSample[]).map((s) => {
         const ts = new Date(s.timestamp).toISOString();
         return `${ts},${s.powerW ?? ''},${s.cadenceRpm ?? ''},${s.speedKph ?? ''},${s.resistance ?? ''},${s.heartRateBpm ?? ''}`;
       }).join('\n') + '\n';

@@ -28,7 +28,7 @@ export function WorkoutChart({
   const [hoverTime, setHoverTime] = useState<number | null>(null);
 
   const totalDuration = workout.blocks.reduce((acc, b) => acc + b.durationSeconds, 0);
-  // Ensure the chart scales to at least AC or the max power in the workout
+  // Ensure the chart scales to at least one-minute power or the max power in the workout.
   const maxPower = Math.max(
     ...workout.blocks.map(b => b.targetPower),
     riderProfile.fourDP.ac * 1.1
@@ -58,6 +58,31 @@ export function WorkoutChart({
   };
 
   const metrics = calculateWorkoutMetrics(workout, riderProfile.fourDP.ftp);
+  const powerLegend = [
+    { label: "P5", color: riderProfile.colors.nm },
+    { label: "P60", color: riderProfile.colors.ac },
+    { label: "P300", color: riderProfile.colors.map },
+    { label: "Threshold", color: riderProfile.colors.ftp },
+  ];
+  const chartBlocks = workout.blocks.reduce<
+    Array<{ block: Workout["blocks"][number]; blockWidth: number; blockHeight: number; x: number; y: number; color: string }>
+  >((segments, block) => {
+    const previous = segments.at(-1);
+    const x = previous ? previous.x + previous.blockWidth : 0;
+    const blockWidth = (block.durationSeconds / totalDuration) * 100;
+    const blockHeight = (block.targetPower / maxPower) * height;
+
+    segments.push({
+      block,
+      blockWidth,
+      blockHeight,
+      x,
+      y: height - blockHeight,
+      color: getColorForPower(block.targetPower, riderProfile),
+    });
+
+    return segments;
+  }, []);
 
   // Find hovered block
   let hoveredBlock = null;
@@ -72,8 +97,6 @@ export function WorkoutChart({
     }
   }
 
-  let currentX = 0;
-
   if (preview) {
     return (
       <div className="w-full h-12 relative bg-[#1a1a1a] rounded overflow-hidden">
@@ -87,24 +110,16 @@ export function WorkoutChart({
             strokeWidth="1" 
             strokeOpacity="0.3" 
           />
-          {workout.blocks.map((block, i) => {
-            const blockWidth = (block.durationSeconds / totalDuration) * 100;
-            const blockHeight = (block.targetPower / maxPower) * height;
-            const y = height - blockHeight;
-            const color = getColorForPower(block.targetPower, riderProfile);
-            const rect = (
-              <rect
-                key={i}
-                x={currentX}
-                y={y}
-                width={blockWidth}
-                height={blockHeight}
-                fill={color}
-              />
-            );
-            currentX += blockWidth;
-            return rect;
-          })}
+          {chartBlocks.map(({ x, y, blockWidth, blockHeight, color }, i) => (
+            <rect
+              key={i}
+              x={x}
+              y={y}
+              width={blockWidth}
+              height={blockHeight}
+              fill={color}
+            />
+          ))}
         </svg>
       </div>
     );
@@ -129,14 +144,12 @@ export function WorkoutChart({
         </div>
         <div className="text-right flex items-center gap-4">
           <div className="flex gap-1.5 items-center">
-            <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider mr-1">NM</span>
-            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: riderProfile.colors.nm }}></div>
-            <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider ml-1 mr-1">AC</span>
-            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: riderProfile.colors.ac }}></div>
-            <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider ml-1 mr-1">MAP</span>
-            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: riderProfile.colors.map }}></div>
-            <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider ml-1 mr-1">FTP</span>
-            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: riderProfile.colors.ftp }}></div>
+            {powerLegend.map(({ label, color }) => (
+              <div key={label} className="flex items-center gap-1">
+                <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">{label}</span>
+                <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: color }}></div>
+              </div>
+            ))}
           </div>
         </div>
       </div>
@@ -151,7 +164,7 @@ export function WorkoutChart({
           onMouseLeave={handleMouseLeave}
           onClick={handleClick}
         >
-          {/* FTP Line */}
+          {/* Threshold line */}
           <line 
             x1="0" 
             y1={ftpY} 
@@ -162,27 +175,18 @@ export function WorkoutChart({
             strokeOpacity="0.8" 
           />
           
-          {workout.blocks.map((block, i) => {
-            const blockWidth = (block.durationSeconds / totalDuration) * 100;
-            const blockHeight = (block.targetPower / maxPower) * height;
-            const y = height - blockHeight;
-            const color = getColorForPower(block.targetPower, riderProfile);
-            
-            const rect = (
-              <rect
-                key={i}
-                x={currentX}
-                y={y}
-                width={blockWidth}
-                height={blockHeight}
-                fill={color}
-                stroke="#202020"
-                strokeWidth="0.1"
-              />
-            );
-            currentX += blockWidth;
-            return rect;
-          })}
+          {chartBlocks.map(({ x, y, blockWidth, blockHeight, color }, i) => (
+            <rect
+              key={i}
+              x={x}
+              y={y}
+              width={blockWidth}
+              height={blockHeight}
+              fill={color}
+              stroke="#202020"
+              strokeWidth="0.1"
+            />
+          ))}
 
           {/* Progress Overlay */}
           {progressSeconds > 0 && (
@@ -225,7 +229,7 @@ export function WorkoutChart({
           )}
         </svg>
 
-        {/* FTP Label Overlay */}
+        {/* Threshold label overlay */}
         <div 
           className="absolute left-2 px-2 py-0.5 bg-white text-black text-xs font-bold rounded-full shadow-sm pointer-events-none"
           style={{ top: `${(ftpY / height) * 100}%`, transform: 'translateY(-50%)' }}
