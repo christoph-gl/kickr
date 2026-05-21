@@ -154,6 +154,14 @@ The workout player uses `POST /api/coach/live` for app-owned, low-latency feedba
 
 The feedback is rendered below the Power/Cadence/HR card. `LIVE_COACH_TIMEOUT_MS` defaults to 8000 ms; on timeout the ride keeps running and the coach panel shows an offline/detail message instead of blocking trainer control.
 
+Experimental spoken feedback can be enabled with xAI/Grok TTS. Set `XAI_API_KEY`
+or the existing `VOICE_CREATION_API_KEY` in `.env.local`, and optionally
+`GROK_TTS_VOICE_ID=sal`. When a new coach message arrives, the browser still
+plays the local notification chime, then requests `POST /api/coach/tts`. The
+server wraps the coach text as `<loud>...</loud>`, calls
+`https://api.x.ai/v1/tts`, and returns MP3 audio for the browser to play. TTS
+failures are non-blocking; the text feedback remains visible.
+
 ## Post-Ride LLM Summaries
 
 When the rider taps **Finish & Save**, the workout player asks for optional free-text comments. The browser posts the full `RideSession` to `POST /api/sessions`; the server enriches it through `lib/ride-summary.ts` before writing to SQLite. If no summary model/key is configured, the ride still saves with `llmSummaryStatus: "skipped"`.

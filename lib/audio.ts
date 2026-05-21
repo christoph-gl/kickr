@@ -68,6 +68,17 @@ class AudioService {
     }
   }
 
+  async playArrayBuffer(arrayBuffer: ArrayBuffer) {
+    await this.init();
+    if (!this.ctx) return;
+
+    const audioBuffer = await this.ctx.decodeAudioData(arrayBuffer.slice(0));
+    const source = this.ctx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(this.ctx.destination);
+    source.start(0);
+  }
+
   playNotification() {
     this.playBuffer('notification');
   }

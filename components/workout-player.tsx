@@ -142,6 +142,7 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
   const liveCoachRunningRef = useRef(false);
   const initialLiveCoachRequestedRef = useRef(false);
   const lastLiveCoachCheckSecondRef = useRef(0);
+  const coachSpeechRequestRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const zwoFileInputRef = useRef<HTMLInputElement>(null);
   const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
@@ -607,6 +608,30 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
 
   const totalDuration = workout.blocks.reduce((acc, b) => acc + b.durationSeconds, 0);
 
+  const speakCoachText = useCallback(async (text: string) => {
+    const requestId = coachSpeechRequestRef.current + 1;
+    coachSpeechRequestRef.current = requestId;
+
+    try {
+      const response = await fetch("/api/coach/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.error || "Coach speech failed");
+      }
+
+      const audio = await response.arrayBuffer();
+      if (coachSpeechRequestRef.current !== requestId) return;
+      await audioService.playArrayBuffer(audio);
+    } catch (err) {
+      console.warn("Coach speech unavailable:", err);
+    }
+  }, []);
+
   const buildTelemetrySnapshots = useCallback((): TelemetrySnapshot[] => {
     const samples = telemetrySamplesRef.current;
     if (samples.length === 0) return [];
@@ -717,6 +742,7 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
       if (text) {
         setLiveCoachFeedback(text);
         audioService.playCoachMessage();
+        void speakCoachText(text);
       }
       if (typeof data?.action?.reason === "string") {
         setLiveCoachDetail(data.action.reason);
@@ -738,6 +764,7 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
     elapsedSeconds,
     getRemainingWorkoutSnapshot,
     riderProfile,
+    speakCoachText,
     workout.name,
   ]);
 
