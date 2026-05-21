@@ -4,7 +4,7 @@ import { useRef, useState, useEffect } from "react";
 import { KickrCore2Client } from "@/lib/kickr-client";
 import { HeartRateClient } from "@/lib/hr-client";
 import { Button } from "@/components/ui/button";
-import { Cog } from "lucide-react";
+import { Cog, History, Trash2 } from "lucide-react";
 import { getRiderProfile, RIDER_PROFILE, saveRiderProfile, type RiderProfile } from "@/lib/profile";
 import { WorkoutPlayer, type WorkoutPlayerHandle } from "@/components/workout-player";
 import { 
@@ -53,6 +53,8 @@ export default function App() {
   const [isSavingSession, setIsSavingSession] = useState(false);
   const [savedSummarySession, setSavedSummarySession] = useState<RideSession | null>(null);
   const [isSavedSummaryOpen, setIsSavedSummaryOpen] = useState(false);
+  const [isSessionHistoryOpen, setIsSessionHistoryOpen] = useState(false);
+  const [sessionSampleCount, setSessionSampleCount] = useState(0);
 
   const [sessions, setSessions] = useState<RideSession[]>([]);
   const currentSessionFilenameRef = useRef<string | null>(null);
@@ -162,11 +164,13 @@ export default function App() {
       // Reset logging for a potential new session
       currentSessionFilenameRef.current = `ride-${Date.now()}`;
       unsavedSamplesRef.current = [];
+      setSessionSampleCount(0);
 
       await clientRef.current.connect(
         (sample) => {
           setPower(sample.powerW);
           setCadence(sample.cadenceRpm);
+          setSessionSampleCount(clientRef.current.samples.length);
           // Only update local HR state if trainer provides it AND external HRM is not connected
           if (sample.heartRateBpm !== undefined && !hrClientRef.current.isConnected) {
             setHeartRate(sample.heartRateBpm);
@@ -197,6 +201,7 @@ export default function App() {
         }
       );
       setConnectionState("connected");
+      setSessionSampleCount(clientRef.current.samples.length);
     } catch (e) {
       setConnectionState("disconnected");
       console.error(e);
@@ -300,6 +305,7 @@ export default function App() {
       setSavedSummarySession(savedSession);
       setIsSavedSummaryOpen(true);
       clientRef.current.samples = []; // Clear samples for next session
+      setSessionSampleCount(0);
       currentSessionFilenameRef.current = null; // Mark session as ended
     } catch (error) {
       console.error("Failed to finish session:", error);
@@ -439,6 +445,108 @@ export default function App() {
       </div>
     );
   };
+
+  const renderSessionHistory = () => (
+    <div className="flex flex-col gap-3">
+      {/* Current unsaved samples if any */}
+      {sessionSampleCount > 0 && (
+        <div className="flex flex-col gap-2 rounded-md border border-dashed bg-muted/10 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <span className="font-semibold text-xs">Unsaved Session</span>
+            <span className="text-[10px] text-muted-foreground">
+              {isSavingSession ? "Saving summary..." : `${sessionSampleCount} samples`}
+            </span>
+          </div>
+          <Button onClick={exportCsv} variant="outline" size="sm" className="h-7 w-full text-xs">
+            Export Temporary CSV
+          </Button>
+        </div>
+      )}
+
+      {sessions.length === 0 && sessionSampleCount === 0 && (
+        <p className="py-8 text-center text-xs text-muted-foreground">No sessions recorded yet.</p>
+      )}
+
+      <div className="flex max-h-[65vh] flex-col gap-2 overflow-y-auto pr-1">
+        {sessions.map((session) => (
+          <div key={session.id} className="group relative flex flex-col gap-2 rounded-md border bg-card p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex min-w-0 flex-col">
+                <span className="truncate pr-8 text-sm font-bold">{session.workoutName}</span>
+                <span className="text-[10px] text-muted-foreground">
+                  {new Date(session.timestamp).toLocaleDateString()} at {new Date(session.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </div>
+              <Button
+                onClick={() => handleDeleteSession(session.id)}
+                variant="ghost"
+                size="icon-sm"
+                className="absolute right-2 top-2 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
+                aria-label={`Delete ${session.workoutName}`}
+              >
+                <Trash2 className="h-3 w-3" />
+              </Button>
+            </div>
+
+            <div className="grid grid-cols-3 gap-1 text-center">
+              <div className="flex flex-col">
+                <span className="text-[9px] uppercase text-muted-foreground">Power</span>
+                <span className="font-mono text-xs">{session.metrics.avgPower || "-"}W</span>
+              </div>
+              <div className="flex flex-col">
+                <span className="text-[9px] uppercase text-muted-foreground">TSS</span>
+                <span className="font-mono text-xs">{Math.round(session.metrics.tss)}</span>
+              </div>
+              <div className="flex flex-col">
+                <span className="text-[9px] uppercase text-muted-foreground">Time</span>
+                <span className="font-mono text-xs">
+                  {Math.floor(session.metrics.durationSeconds / 60)}m
+                </span>
+              </div>
+            </div>
+
+            {session.riderComments && (
+              <p className="rounded-sm bg-muted/30 px-2 py-1 text-[10px] text-muted-foreground">
+                {session.riderComments}
+              </p>
+            )}
+
+            {session.llmSummary && (
+              <div className="rounded-sm border bg-muted/20 p-2">
+                <div className="mb-1 font-bold uppercase tracking-wider text-muted-foreground">
+                  AI Summary
+                </div>
+                {renderRideSummary(session, true)}
+                <details className="mt-2">
+                  <summary className="cursor-pointer text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                    More
+                  </summary>
+                  <div className="mt-2 border-t pt-2">
+                    {renderRideSummary(session)}
+                  </div>
+                </details>
+              </div>
+            )}
+
+            {!session.llmSummary && session.llmSummaryStatus && (
+              <p className="text-[10px] text-muted-foreground">
+                Summary {session.llmSummaryStatus}
+              </p>
+            )}
+
+            <Button
+              onClick={() => handleExportSession(session)}
+              variant="secondary"
+              size="sm"
+              className="h-7 w-full text-[10px] font-bold"
+            >
+              Download CSV
+            </Button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 
   return (
     <main className="flex min-h-svh flex-col gap-6 p-6 lg:flex-row">
@@ -802,103 +910,29 @@ export default function App() {
             )}
           </div>
 
-          <div className="flex flex-col gap-2 pt-2 border-t">
-            <h3 className="text-xs font-bold text-muted-foreground uppercase tracking-widest px-1">Session History</h3>
-            
-            {/* Current unsaved samples if any */}
-            {clientRef.current.samples.length > 0 && (
-              <div className="p-3 border rounded-md bg-muted/10 border-dashed flex flex-col gap-2">
-                <div className="flex justify-between items-center">
-                  <span className="font-semibold text-xs">Unsaved Session</span>
-                  <span className="text-[10px] text-muted-foreground">
-                    {isSavingSession ? "Saving summary..." : `${clientRef.current.samples.length} samples`}
+          <div className="border-t pt-2">
+            <Dialog open={isSessionHistoryOpen} onOpenChange={setIsSessionHistoryOpen}>
+              <DialogTrigger asChild>
+                <Button variant="outline" className="w-full justify-between">
+                  <span className="flex items-center gap-2">
+                    <History className="h-4 w-4" />
+                    Session History
                   </span>
-                </div>
-                <Button onClick={exportCsv} variant="outline" size="sm" className="w-full h-7 text-xs">
-                  Export Temporary CSV
+                  <span className="text-xs text-muted-foreground">
+                    {sessions.length}
+                  </span>
                 </Button>
-              </div>
-            )}
-
-            {sessions.length === 0 && clientRef.current.samples.length === 0 && (
-              <p className="text-xs text-muted-foreground text-center py-4">No sessions recorded yet.</p>
-            )}
-
-            <div className="flex flex-col gap-2 max-h-[300px] overflow-y-auto pr-1">
-              {sessions.map((session) => (
-                <div key={session.id} className="p-3 border rounded-md bg-card flex flex-col gap-2 group relative">
-                  <div className="flex justify-between items-start">
-                    <div className="flex flex-col min-w-0">
-                      <span className="font-bold text-sm truncate pr-6">{session.workoutName}</span>
-                      <span className="text-[10px] text-muted-foreground">
-                        {new Date(session.timestamp).toLocaleDateString()} at {new Date(session.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                    </div>
-                    <button 
-                      onClick={() => handleDeleteSession(session.id)}
-                      className="opacity-0 group-hover:opacity-100 absolute top-2 right-2 text-muted-foreground hover:text-destructive transition-opacity"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-1 text-center">
-                    <div className="flex flex-col">
-                      <span className="text-[9px] text-muted-foreground uppercase">Power</span>
-                      <span className="font-mono text-xs">{session.metrics.avgPower || "-"}W</span>
-                    </div>
-                    <div className="flex flex-col">
-                      <span className="text-[9px] text-muted-foreground uppercase">TSS</span>
-                      <span className="font-mono text-xs">{Math.round(session.metrics.tss)}</span>
-                    </div>
-                    <div className="flex flex-col">
-                      <span className="text-[9px] text-muted-foreground uppercase">Time</span>
-                      <span className="font-mono text-xs">
-                        {Math.floor(session.metrics.durationSeconds / 60)}m
-                      </span>
-                    </div>
-                  </div>
-
-                  {session.riderComments && (
-                    <p className="rounded-sm bg-muted/30 px-2 py-1 text-[10px] text-muted-foreground">
-                      {session.riderComments}
-                    </p>
-                  )}
-
-                  {session.llmSummary && (
-                    <div className="rounded-sm border bg-muted/20 p-2">
-                      <div className="mb-1 font-bold uppercase tracking-wider text-muted-foreground">
-                        AI Summary
-                      </div>
-                      {renderRideSummary(session, true)}
-                      <details className="mt-2">
-                        <summary className="cursor-pointer text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                          More
-                        </summary>
-                        <div className="mt-2 border-t pt-2">
-                          {renderRideSummary(session)}
-                        </div>
-                      </details>
-                    </div>
-                  )}
-
-                  {!session.llmSummary && session.llmSummaryStatus && (
-                    <p className="text-[10px] text-muted-foreground">
-                      Summary {session.llmSummaryStatus}
-                    </p>
-                  )}
-
-                  <Button 
-                    onClick={() => handleExportSession(session)} 
-                    variant="secondary" 
-                    size="sm" 
-                    className="w-full h-7 text-[10px] font-bold"
-                  >
-                    DOWNLOAD CSV
-                  </Button>
-                </div>
-              ))}
-            </div>
+              </DialogTrigger>
+              <DialogContent className="max-h-[85vh] overflow-hidden rounded-md sm:max-w-2xl">
+                <DialogHeader>
+                  <DialogTitle>Session History</DialogTitle>
+                  <DialogDescription>
+                    Review saved rides, export CSV files, or remove sessions.
+                  </DialogDescription>
+                </DialogHeader>
+                {renderSessionHistory()}
+              </DialogContent>
+            </Dialog>
           </div>
         </div>
       </div>
