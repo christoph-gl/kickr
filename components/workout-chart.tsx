@@ -17,12 +17,14 @@ export function WorkoutChart({
   onSeek,
   preview = false,
   riderProfile = RIDER_PROFILE,
+  actualPowerSamples = [],
 }: { 
   workout: Workout; 
   progressSeconds: number;
   onSeek?: (seconds: number) => void;
   preview?: boolean;
   riderProfile?: RiderProfile;
+  actualPowerSamples?: Array<{ elapsedSeconds: number; power?: number }>;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [hoverTime, setHoverTime] = useState<number | null>(null);
@@ -83,6 +85,20 @@ export function WorkoutChart({
 
     return segments;
   }, []);
+  const powerTracePoints = actualPowerSamples
+    .filter(
+      (sample): sample is { elapsedSeconds: number; power: number } =>
+        typeof sample.power === "number" &&
+        sample.elapsedSeconds >= 0 &&
+        sample.elapsedSeconds <= totalDuration
+    )
+    .map((sample) => ({
+      x: (sample.elapsedSeconds / totalDuration) * 100,
+      y: height - (Math.min(sample.power, maxPower) / maxPower) * height,
+    }));
+  const powerTracePath = powerTracePoints
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(3)} ${point.y.toFixed(3)}`)
+    .join(" ");
 
   // Find hovered block
   let hoveredBlock = null;
@@ -187,6 +203,19 @@ export function WorkoutChart({
               strokeWidth="0.1"
             />
           ))}
+
+          {powerTracePath && (
+            <path
+              d={powerTracePath}
+              fill="none"
+              stroke="white"
+              strokeWidth="0.55"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeOpacity="0.95"
+              style={{ pointerEvents: 'none' }}
+            />
+          )}
 
           {/* Progress Overlay */}
           {progressSeconds > 0 && (

@@ -41,6 +41,7 @@ type WorkoutPlayerProps = {
   onPowerTargetChange: (watts: number) => void;
   onStopSession: (workoutName: string, riderComments?: string) => void;
   onWorkoutChange?: (workout: Workout) => void;
+  manualControlMode?: "erg" | "resistance";
   disabled: boolean;
   power?: number;
   cadence?: number;
@@ -97,6 +98,7 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
     onPowerTargetChange,
     onStopSession,
     onWorkoutChange,
+    manualControlMode = "erg",
     disabled,
     power,
     cadence,
@@ -128,6 +130,8 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
   const [isSavingBuiltWorkout, setIsSavingBuiltWorkout] = useState(false);
   const [deletingWorkoutId, setDeletingWorkoutId] = useState<string | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [currentTargetPower, setCurrentTargetPower] = useState<number | null>(null);
+  const [actualPowerSamples, setActualPowerSamples] = useState<Array<{ elapsedSeconds: number; power?: number }>>([]);
   const [liveCoachFeedback, setLiveCoachFeedback] = useState<string | null>(null);
   const [liveCoachDetail, setLiveCoachDetail] = useState<string | null>(null);
   const [liveCoachStatus, setLiveCoachStatus] = useState<"idle" | "checking" | "error">("idle");
@@ -150,6 +154,7 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
   const zwoFileInputRef = useRef<HTMLInputElement>(null);
   const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
   const adaptive = isAdaptiveFreeride(workout);
+  const isResistanceWorkoutMode = manualControlMode === "resistance" || activeTrainerMode.type === "resistance";
 
   useEffect(() => {
     elapsedSecondsRef.current = elapsedSeconds;
@@ -438,6 +443,7 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
         }
       }
       lastTargetRef.current = currentTarget;
+      setCurrentTargetPower(currentTarget);
       onPowerTargetChange(currentTarget);
     }
   }, [elapsedSeconds, isPlaying, workout, onPowerTargetChange]);
@@ -458,6 +464,7 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
       if (newBlockIndex !== -1) {
         const currentTarget = workout.blocks[newBlockIndex].targetPower;
         lastTargetRef.current = currentTarget;
+        setCurrentTargetPower(currentTarget);
         onPowerTargetChange(currentTarget);
       }
     }
@@ -467,6 +474,8 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
   const handleStop = () => {
     setIsPlaying(false);
     setElapsedSeconds(0);
+    setCurrentTargetPower(null);
+    setActualPowerSamples([]);
     setUpcomingChange(null);
     lastTargetRef.current = null;
   };
@@ -629,6 +638,7 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
     if (newBlockIndex !== -1) {
       const currentTarget = workout.blocks[newBlockIndex].targetPower;
       lastTargetRef.current = currentTarget;
+      setCurrentTargetPower(currentTarget);
       onPowerTargetChange(currentTarget);
     } else {
       handleStop();
@@ -825,6 +835,10 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
     telemetrySamplesRef.current = telemetrySamplesRef.current.filter(
       (sample) => elapsedSeconds - sample.elapsedSeconds <= 10 * 60
     );
+    setActualPowerSamples((samples) => [
+      ...samples.filter((sample) => sample.elapsedSeconds < elapsedSeconds),
+      { elapsedSeconds, power },
+    ]);
 
     if (
       elapsedSeconds >= 5 * 60 &&
@@ -1070,7 +1084,13 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
         </div>
       </div>
 
-      <WorkoutChart workout={workout} progressSeconds={elapsedSeconds} onSeek={handleSeek} riderProfile={riderProfile} />
+      <WorkoutChart
+        workout={workout}
+        progressSeconds={elapsedSeconds}
+        onSeek={handleSeek}
+        riderProfile={riderProfile}
+        actualPowerSamples={actualPowerSamples}
+      />
 
       {builderRationale && (
         <div className="flex flex-col gap-3 rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
@@ -1111,8 +1131,18 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
                   Target: {activeTrainerMode.watts}W
                 </span>
               )}
+              {isResistanceWorkoutMode && currentTargetPower !== null && (
+                <span className="text-[10px] text-primary normal-case font-medium leading-none">
+                  Target: {currentTargetPower}W
+                </span>
+              )}
             </span>
             <span className="text-2xl font-mono">{power ?? "-"} <span className="text-sm">W</span></span>
+            {isResistanceWorkoutMode && currentTargetPower !== null && typeof power === "number" && (
+              <span className={`mt-1 text-xs font-semibold ${Math.abs(power - currentTargetPower) <= Math.max(8, currentTargetPower * 0.05) ? "text-green-400" : power > currentTargetPower ? "text-orange-400" : "text-blue-300"}`}>
+                {power > currentTargetPower ? "+" : ""}{Math.round(power - currentTargetPower)} W
+              </span>
+            )}
             
             <div className="h-6 w-full mt-1">
               {upcomingChange && (

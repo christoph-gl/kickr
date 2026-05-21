@@ -312,6 +312,15 @@ export default function App() {
     }
   }
 
+  async function applyWorkoutTargetPower(watts: number) {
+    if (activeTrainerMode.type === "resistance" || mode === "resistance") {
+      setTargetPower(watts);
+      return;
+    }
+
+    await applyTargetPower(watts);
+  }
+
   const handleStopSession = async (workoutName: string, riderComments?: string) => {
     const samples = [...clientRef.current.samples];
     if (samples.length === 0) return;
@@ -974,9 +983,10 @@ export default function App() {
         <WorkoutPlayer
            ref={workoutPlayerRef}
            disabled={connectionState !== "connected"}
-           onPowerTargetChange={applyTargetPower}
+           onPowerTargetChange={applyWorkoutTargetPower}
            onStopSession={handleStopSession}
            onWorkoutChange={(w) => activeWorkoutNameRef.current = w.name}
+           manualControlMode={mode}
            power={power}
            cadence={cadence}
            heartRate={heartRate}
