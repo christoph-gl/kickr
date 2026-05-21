@@ -1,8 +1,7 @@
-import { generateObject } from "ai";
+import { generateObject, getOpenRouterModel, openRouterApiKey, openRouterDefaultModel } from "./llm-calls-env";
 import { z } from "zod";
 import type { RiderProfile } from "./profile";
 import type { RideSession } from "./sessions";
-import { ensureAiGatewayApiKey, llmCallsApiKey, llmCallsModel } from "./llm-calls-env";
 
 export type MonthlyTrainingSummary = {
   headline: string;
@@ -18,12 +17,14 @@ export type MonthlyTrainingSummary = {
 const monthlySummaryApiKey =
   process.env.MONTHLY_SUMMARY_API_KEY ||
   process.env.RIDE_SUMMARY_API_KEY ||
-  llmCallsApiKey;
+  openRouterApiKey;
 
-const monthlySummaryModel =
+const monthlySummaryModelName =
   process.env.MONTHLY_SUMMARY_MODEL ||
   process.env.RIDE_SUMMARY_MODEL ||
-  llmCallsModel;
+  openRouterDefaultModel;
+
+const monthlySummaryModel = getOpenRouterModel(monthlySummaryModelName);
 
 const MonthlySummarySchema = z.object({
   headline: z.string().max(100),
@@ -141,11 +142,12 @@ export async function summarizeMonth(
     );
   }
 
-  ensureAiGatewayApiKey(monthlySummaryApiKey);
+
 
   const payload = buildMonthlyPayload(month, monthSessions, riderProfile);
   const result = await generateObject({
     model: monthlySummaryModel,
+    apiKey: monthlySummaryApiKey,
     messages: [
       {
         role: "user",
@@ -169,5 +171,5 @@ ${JSON.stringify(payload, null, 2)}`,
     schema: MonthlySummarySchema,
   });
 
-  return { summary: result.object, model: monthlySummaryModel };
+  return { summary: result.object, model: monthlySummaryModelName };
 }

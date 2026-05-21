@@ -1,14 +1,17 @@
-import { generateObject } from "ai"
+import { generateObject, getOpenRouterModel, openRouterApiKey, openRouterDefaultModel } from "@/lib/llm-calls-env"
 import { z } from "zod"
 import { NextResponse } from "next/server"
 
 const workoutImageExtractorApiKey =
-  process.env.WORKOUT_IMAGE_EXTRACTOR_API_KEY || process.env.AI_GATEWAY_API_KEY
+  process.env.WORKOUT_IMAGE_EXTRACTOR_API_KEY || openRouterApiKey
 
-const workoutImageExtractorModel =
+const workoutImageExtractorModelName =
   process.env.WORKOUT_IMAGE_EXTRACTOR_MODEL ||
-  process.env.AI_GATEWAY_MODEL ||
-  "google/gemini-3-flash"
+  openRouterDefaultModel
+
+const workoutImageExtractorModel = getOpenRouterModel(
+  workoutImageExtractorModelName
+)
 
 export async function POST(request: Request) {
   try {
@@ -21,12 +24,9 @@ export async function POST(request: Request) {
 
     const buffer = await file.arrayBuffer()
 
-    if (workoutImageExtractorApiKey && !process.env.AI_GATEWAY_API_KEY) {
-      process.env.AI_GATEWAY_API_KEY = workoutImageExtractorApiKey
-    }
-
     const result = await generateObject({
       model: workoutImageExtractorModel,
+      apiKey: workoutImageExtractorApiKey,
       messages: [
         {
           role: "user",

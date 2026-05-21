@@ -1,58 +1,75 @@
-import { generateObject, type ModelMessage } from "ai";
+import {
+  generateObject,
+  type ModelMessage,
+  getOpenRouterModel,
+  openRouterApiKey,
+  openRouterDefaultModel,
+} from "@/lib/llm-calls-env";
 import { z } from "zod";
 import { NextResponse } from "next/server";
 import type { AgentCommand } from "@/lib/agent";
 import { makeAgentCommandId } from "@/lib/agent";
-import { ensureAiGatewayApiKey, llmCallsApiKey, llmCallsModel } from "@/lib/llm-calls-env";
 
 export const dynamic = "force-dynamic";
 
-const liveCoachApiKey = process.env.LIVE_COACH_API_KEY || llmCallsApiKey;
+const liveCoachApiKey = process.env.LIVE_COACH_API_KEY || openRouterApiKey;
 
-const liveCoachModel =
-  process.env.LIVE_COACH_MODEL || llmCallsModel;
+const liveCoachModelName =
+  process.env.LIVE_COACH_MODEL || openRouterDefaultModel;
+
+const liveCoachModel = getOpenRouterModel(liveCoachModelName);
 
 const liveCoachTimeoutMs = Math.min(
   30_000,
   Math.max(1_000, Number(process.env.LIVE_COACH_TIMEOUT_MS || 8_000))
 );
 
-const LiveCoachActionSchema = z.object({
-  action: z.enum([
-    "none",
-    "send_message",
-    "set_erg_watts",
-    "set_resistance",
-    "set_workout_plan",
-  ]),
-  text: z
-    .string()
-    .optional()
-    .describe("Short rider-facing cue when action is send_message."),
-  watts: z
-    .number()
-    .optional()
-    .describe("ERG target watts to apply immediately when action is set_erg_watts."),
-  percent: z
-    .number()
-    .optional()
-    .describe("Resistance percent from 0 to 100 when action is set_resistance."),
-  leadSeconds: z
-    .number()
-    .optional()
-    .describe("Delay before a workout-plan splice takes effect."),
-  blocks: z
-    .array(
-      z.object({
-        durationSeconds: z.number(),
-        targetPower: z.number(),
-      })
-    )
-    .optional()
-    .describe("Upcoming workout blocks that replace the current remaining workout plan."),
-  reason: z.string().optional().describe("Brief internal reason for the chosen action."),
-  speak: z.boolean().optional(),
-});
+const LiveCoachActionSchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("none"),
+    reason: z.string().optional().describe("Brief internal reason for taking no action."),
+  }),
+  z.object({
+    action: z.literal("send_message"),
+    text: z
+      .string()
+      .min(1)
+      .describe("Short rider-facing cue to display when action is send_message."),
+    reason: z.string().optional().describe("Brief internal reason for the chosen action."),
+    speak: z.boolean().optional(),
+  }),
+  z.object({
+    action: z.literal("set_erg_watts"),
+    watts: z
+      .number()
+      .describe("ERG target watts to apply immediately when action is set_erg_watts."),
+    reason: z.string().optional().describe("Brief internal reason for the chosen action."),
+  }),
+  z.object({
+    action: z.literal("set_resistance"),
+    percent: z
+      .number()
+      .describe("Resistance percent from 0 to 100 when action is set_resistance."),
+    reason: z.string().optional().describe("Brief internal reason for the chosen action."),
+  }),
+  z.object({
+    action: z.literal("set_workout_plan"),
+    leadSeconds: z
+      .number()
+      .optional()
+      .describe("Delay before a workout-plan splice takes effect."),
+    blocks: z
+      .array(
+        z.object({
+          durationSeconds: z.number(),
+          targetPower: z.number(),
+        })
+      )
+      .min(1)
+      .describe("Upcoming workout blocks that replace the current remaining workout plan."),
+    reason: z.string().optional().describe("Brief internal reason for the chosen action."),
+  }),
+]);
 
 const WorkoutPlanEditSchema = z.object({
   leadSeconds: z
@@ -367,12 +384,11 @@ export async function POST(request: Request) {
     );
   }
 
-  ensureAiGatewayApiKey(liveCoachApiKey);
-
   try {
     if (isLikelyWorkoutPlanEdit(riderText, compactedSnapshot)) {
       const result = await generateObject({
         model: liveCoachModel,
+        apiKey: liveCoachApiKey,
         temperature: 0,
         abortSignal: AbortSignal.timeout(liveCoachTimeoutMs),
         maxOutputTokens: 1_400,
@@ -400,7 +416,7 @@ At most 30 blocks. At most 30 minutes total. Keep whole watts.`,
       const command = toCommand(action);
 
       return NextResponse.json({
-        model: liveCoachModel,
+        model: liveCoachModelName,
         mode: "workout_plan_edit",
         durationMs: Date.now() - startedAt,
         action,
@@ -434,6 +450,7 @@ At most 30 blocks. At most 30 minutes total. Keep whole watts.`,
 
     const result = await generateObject({
       model: liveCoachModel,
+      apiKey: liveCoachApiKey,
       temperature: 0.2,
       abortSignal: AbortSignal.timeout(liveCoachTimeoutMs),
       maxOutputTokens: 2_000,
@@ -446,6 +463,7 @@ Available executable actions:
 - set_resistance: immediately changes trainer resistance percent.
 - set_workout_plan: replaces the upcoming workout track after leadSeconds.
 - send_message: rider-facing text only; it does not change trainer load.
+When action is send_message, include a non-empty text field with the exact rider-facing words to display.
 Do not use send_message when the rider clearly asks to change watts or resistance and the snapshot says the trainer is connected.
 For coach_check without a specific rider request, prefer a short rider-facing cue under 12 words unless telemetry clearly calls for ERG or resistance adjustment.
 For ride_start_summary during a preplanned workout, return send_message only. Summarize the course the rider is starting: duration, target-power pattern, likely purpose, and one simple focus cue. Keep it under 35 words. Do not return set_workout_plan, set_erg_watts, or set_resistance for ride_start_summary.
@@ -468,7 +486,7 @@ If the rider reports pain, dizziness, chest pain, or wants to stop, lower intens
     const command = toCommand(result.object);
 
     return NextResponse.json({
-      model: liveCoachModel,
+      model: liveCoachModelName,
       mode: "live_coach",
       durationMs: Date.now() - startedAt,
       action: result.object,
@@ -482,7 +500,7 @@ If the rider reports pain, dizziness, chest pain, or wants to stop, lower intens
         `[live-coach] Timed out after ${Date.now() - startedAt}ms; no command applied.`
       );
       return NextResponse.json({
-        model: liveCoachModel,
+        model: liveCoachModelName,
         degraded: true,
         durationMs: Date.now() - startedAt,
         error: "Live coach timed out.",
@@ -494,7 +512,7 @@ If the rider reports pain, dizziness, chest pain, or wants to stop, lower intens
     console.error("[live-coach] Failed to generate live coach action:", error);
     return NextResponse.json(
       {
-        model: liveCoachModel,
+        model: liveCoachModelName,
         degraded: true,
         durationMs: Date.now() - startedAt,
         error: message,

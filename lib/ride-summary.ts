@@ -1,9 +1,8 @@
-import { generateObject } from "ai";
 import { z } from "zod";
 import type { BikeSample } from "./kickr-client";
 import type { RiderProfile } from "./profile";
 import type { RideLlmSummary, RideSession } from "./sessions";
-import { ensureAiGatewayApiKey, llmCallsApiKey, llmCallsModel } from "./llm-calls-env";
+import { generateObject, getOpenRouterModel, openRouterApiKey, openRouterDefaultModel } from "./llm-calls-env";
 
 type NumericSampleKey = "powerW" | "cadenceRpm" | "speedKph" | "resistance" | "heartRateBpm";
 
@@ -15,12 +14,14 @@ export type RideSummaryInput = {
 const rideSummaryApiKey =
   process.env.RIDE_SUMMARY_API_KEY ||
   process.env.LIVE_COACH_API_KEY ||
-  llmCallsApiKey;
+  openRouterApiKey;
 
-const rideSummaryModel =
+const rideSummaryModelName =
   process.env.RIDE_SUMMARY_MODEL ||
   process.env.LIVE_COACH_MODEL ||
-  llmCallsModel;
+  openRouterDefaultModel;
+
+const rideSummaryModel = getOpenRouterModel(rideSummaryModelName);
 
 const RideSummarySchema = z.object({
   headline: z.string().max(90),
@@ -274,12 +275,13 @@ export async function summarizeRideSession(
     };
   }
 
-  ensureAiGatewayApiKey(rideSummaryApiKey);
+
 
   try {
     const payload = buildRideSummaryPayload(input);
     const result = await generateObject({
       model: rideSummaryModel,
+      apiKey: rideSummaryApiKey,
       messages: [{ role: "user", content: buildRideSummaryPrompt(payload) }],
       schema: RideSummarySchema,
     });

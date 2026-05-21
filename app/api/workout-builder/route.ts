@@ -1,7 +1,6 @@
-import { generateObject } from "ai";
+import { generateObject, getOpenRouterModel, openRouterApiKey, openRouterDefaultModel } from "@/lib/llm-calls-env";
 import { z } from "zod";
 import { NextResponse } from "next/server";
-import { ensureAiGatewayApiKey, llmCallsApiKey, llmCallsModel } from "@/lib/llm-calls-env";
 import { getRiderProfileFromDb, listRideSessions } from "@/lib/db";
 import { calculateWorkoutMetrics, type Workout, type WorkoutBlock } from "@/lib/workouts";
 
@@ -11,13 +10,15 @@ const workoutBuilderApiKey =
   process.env.WORKOUT_BUILDER_API_KEY ||
   process.env.RIDE_SUMMARY_API_KEY ||
   process.env.LIVE_COACH_API_KEY ||
-  llmCallsApiKey;
+  openRouterApiKey;
 
-const workoutBuilderModel =
+const workoutBuilderModelName =
   process.env.WORKOUT_BUILDER_MODEL ||
   process.env.RIDE_SUMMARY_MODEL ||
   process.env.LIVE_COACH_MODEL ||
-  llmCallsModel;
+  openRouterDefaultModel;
+
+const workoutBuilderModel = getOpenRouterModel(workoutBuilderModelName);
 
 const WorkoutBuilderSchema = z.object({
   name: z.string().max(80),
@@ -121,7 +122,7 @@ export async function POST(req: Request) {
         { status: 500 }
       );
     }
-    ensureAiGatewayApiKey(workoutBuilderApiKey);
+
 
     const riderProfile = getRiderProfileFromDb();
     const recentSessions = listRideSessions().slice(0, 5).map(compactSession);
@@ -147,6 +148,7 @@ export async function POST(req: Request) {
 
     const result = await generateObject({
       model: workoutBuilderModel,
+      apiKey: workoutBuilderApiKey,
       messages: [
         {
           role: "user",
@@ -191,7 +193,7 @@ ${JSON.stringify(payload, null, 2)}`,
       rationale: result.object.rationale,
       metrics,
       saved: false,
-      model: workoutBuilderModel,
+      model: workoutBuilderModelName,
       context: {
         now,
         recentRideCount: recentSessions.length,
