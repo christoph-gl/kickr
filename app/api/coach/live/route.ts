@@ -420,9 +420,7 @@ export async function POST(request: Request) {
       const result = await generateObject({
         model: liveCoachModel,
         apiKey: liveCoachApiKey,
-        temperature: 0,
         abortSignal: AbortSignal.timeout(liveCoachTimeoutMs),
-        maxOutputTokens: 1_400,
         maxRetries: 1,
         schema: WorkoutPlanEditSchema,
         system: `You edit the remaining workout track for a KICKR trainer web app.
@@ -482,11 +480,9 @@ At most 30 blocks. At most 30 minutes total. Keep whole watts.`,
     const result = await generateObject({
       model: liveCoachModel,
       apiKey: liveCoachApiKey,
-      temperature: 0.2,
       abortSignal: AbortSignal.timeout(
         intent === "adaptive_plan" ? adaptiveCoachTimeoutMs : liveCoachTimeoutMs
       ),
-      maxOutputTokens: intent === "adaptive_plan" ? 1_200 : 2_000,
       maxRetries: 1,
       schema: LiveCoachActionSchema,
       system: `You are the low-latency live ride coach inside a KICKR trainer web app.

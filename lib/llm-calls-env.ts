@@ -113,7 +113,7 @@ export async function generateObject<T extends z.ZodTypeAny>({
   prompt,
   schema,
   system,
-  temperature = 0.2,
+  temperature,
   abortSignal,
   maxOutputTokens,
   maxRetries = 1,
@@ -144,11 +144,12 @@ export async function generateObject<T extends z.ZodTypeAny>({
         {
           model,
           messages: messagesForAttempt,
-          temperature,
-          max_tokens: maxOutputTokens,
+          ...(typeof temperature === "number" ? { temperature } : {}),
+          ...(typeof maxOutputTokens === "number" ? { max_tokens: maxOutputTokens } : {}),
           provider: {
             require_parameters: true,
           },
+          plugins: [{ id: "response-healing" }],
           response_format: {
             type: "json_schema",
             json_schema: {
