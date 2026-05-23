@@ -23,6 +23,10 @@ const liveCoachTimeoutMs = Math.min(
   30_000,
   Math.max(1_000, Number(process.env.LIVE_COACH_TIMEOUT_MS || 8_000))
 );
+const adaptiveCoachTimeoutMs = Math.min(
+  30_000,
+  Math.max(liveCoachTimeoutMs, Number(process.env.ADAPTIVE_COACH_TIMEOUT_MS || 15_000))
+);
 
 const LiveCoachActionSchema = z.discriminatedUnion("action", [
   z.object({
@@ -184,7 +188,11 @@ function isTimeoutError(error: unknown): boolean {
 
     if (
       name === "TimeoutError" ||
+      name === "AbortError" ||
+      (typeof record?.code === "string" && record.code === "ABORT_ERR") ||
+      (typeof record?.code === "number" && record.code === 20) ||
       message.toLowerCase().includes("timeout") ||
+      message.toLowerCase().includes("aborted") ||
       message.toLowerCase().includes("aborted due to timeout")
     ) {
       return true;
@@ -415,7 +423,7 @@ export async function POST(request: Request) {
         temperature: 0,
         abortSignal: AbortSignal.timeout(liveCoachTimeoutMs),
         maxOutputTokens: 1_400,
-        maxRetries: 0,
+        maxRetries: 1,
         schema: WorkoutPlanEditSchema,
         system: `You edit the remaining workout track for a KICKR trainer web app.
 Return only the replacement remaining workout blocks.
@@ -475,9 +483,11 @@ At most 30 blocks. At most 30 minutes total. Keep whole watts.`,
       model: liveCoachModel,
       apiKey: liveCoachApiKey,
       temperature: 0.2,
-      abortSignal: AbortSignal.timeout(liveCoachTimeoutMs),
-      maxOutputTokens: 2_000,
-      maxRetries: 0,
+      abortSignal: AbortSignal.timeout(
+        intent === "adaptive_plan" ? adaptiveCoachTimeoutMs : liveCoachTimeoutMs
+      ),
+      maxOutputTokens: intent === "adaptive_plan" ? 1_200 : 2_000,
+      maxRetries: 1,
       schema: LiveCoachActionSchema,
       system: `You are the low-latency live ride coach inside a KICKR trainer web app.
 Return one structured action only. This structured action is executed by the browser as the trainer-control tool call.
@@ -500,7 +510,7 @@ For "compress the rest of the workout to 10 minutes", preserve block order and r
 For "make the next 10 minutes easier/harder", return blocks covering about 600 seconds and preserve the rest only when it fits within the 30 block and 30 minute command limit.
 set_workout_plan accepts at most 30 blocks and at most 30 minutes total. If the rider asks to rewrite more than that, apply the best next 30 minutes and explain the scope briefly in reason.
 Use leadSeconds 0 to 5 for rider-requested changes so the UI reflects the new plan immediately or near-immediately.
-If intent is adaptive_plan, use snapshot.adaptiveRideIntent as the ride goal. Return set_workout_plan with 5 to 10 blocks covering roughly the requested horizonSeconds. The plan should usually change target watts when telemetry supports a change, not merely describe one. Respect requested duration, heart-rate goals, hard/easy intent, and rider notes over generic workout structure. Include a short rider-facing text field under 18 words explaining what changed and why. If the plan is effectively unchanged, say that it is holding steady and why.
+If intent is adaptive_plan, use snapshot.adaptiveRideIntent as the ride goal. Return set_workout_plan with 5 to 10 blocks covering roughly the requested horizonSeconds. The plan should usually change target watts when telemetry supports a change, not merely describe one. Respect requested duration, heart-rate goals, hard/easy intent, and rider notes over generic workout structure. Include a short rider-facing text field under 18 words explaining what changed and why. If the plan is effectively unchanged, say that it is holding steady and why. Keep reason under 120 characters.
 Never mention implementation details, APIs, agents, hooks, or JSON to the rider.
 If the rider reports pain, dizziness, chest pain, or wants to stop, lower intensity or stop escalating and send a safety-first cue.`,
       messages: userContent,

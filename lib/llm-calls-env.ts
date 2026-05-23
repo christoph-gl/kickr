@@ -146,6 +146,9 @@ export async function generateObject<T extends z.ZodTypeAny>({
           messages: messagesForAttempt,
           temperature,
           max_tokens: maxOutputTokens,
+          provider: {
+            require_parameters: true,
+          },
           response_format: {
             type: "json_schema",
             json_schema: {
@@ -154,15 +157,15 @@ export async function generateObject<T extends z.ZodTypeAny>({
               schema: jsonSchema,
             },
           },
-        },
+        } as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
         {
           signal: abortSignal,
         }
       );
 
       const text = response.choices[0]?.message?.content;
-      if (!text) {
-        throw new Error("Empty response from model");
+      if (typeof text !== "string" || !text.trim()) {
+        throw new Error("Empty structured response from model");
       }
 
       return { object: schema.parse(parseJsonObject(text)) };
