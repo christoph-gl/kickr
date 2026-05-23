@@ -43,6 +43,10 @@ const LiveCoachActionSchema = z.discriminatedUnion("action", [
     watts: z
       .number()
       .describe("ERG target watts to apply immediately when action is set_erg_watts."),
+    text: z
+      .string()
+      .optional()
+      .describe("Short rider-facing explanation to display when this changes trainer load."),
     reason: z.string().optional().describe("Brief internal reason for the chosen action."),
   }),
   z.object({
@@ -50,6 +54,10 @@ const LiveCoachActionSchema = z.discriminatedUnion("action", [
     percent: z
       .number()
       .describe("Resistance percent from 0 to 100 when action is set_resistance."),
+    text: z
+      .string()
+      .optional()
+      .describe("Short rider-facing explanation to display when this changes trainer load."),
     reason: z.string().optional().describe("Brief internal reason for the chosen action."),
   }),
   z.object({
@@ -67,6 +75,10 @@ const LiveCoachActionSchema = z.discriminatedUnion("action", [
       )
       .min(1)
       .describe("Upcoming workout blocks that replace the current remaining workout plan."),
+    text: z
+      .string()
+      .optional()
+      .describe("Short rider-facing explanation to display when this changes the adaptive plan."),
     reason: z.string().optional().describe("Brief internal reason for the chosen action."),
   }),
 ]);
@@ -266,6 +278,7 @@ function compactSnapshot(value: unknown) {
   const riderProfile = getRecord(snapshot.riderProfile);
   const fourDP = getRecord(riderProfile?.fourDP);
   const rolling = getRecord(snapshot.rolling);
+  const adaptiveRideIntent = getRecord(snapshot.adaptiveRideIntent);
   const rollingSnapshots = Array.isArray(rolling?.snapshots)
     ? rolling.snapshots
         .slice(-20)
@@ -291,6 +304,16 @@ function compactSnapshot(value: unknown) {
     connectionState: compactString(snapshot.connectionState, 40),
     hrConnectionState: compactString(snapshot.hrConnectionState, 40),
     activeTrainerMode: snapshot.activeTrainerMode ?? null,
+    adaptivePlanHorizonSeconds: compactNumber(snapshot.adaptivePlanHorizonSeconds),
+    adaptiveRideIntent: adaptiveRideIntent
+      ? {
+          presetId: compactString(adaptiveRideIntent.presetId, 40),
+          label: compactString(adaptiveRideIntent.label, 80),
+          durationMinutes: compactNumber(adaptiveRideIntent.durationMinutes),
+          prompt: compactString(adaptiveRideIntent.prompt, 500),
+          riderText: compactString(adaptiveRideIntent.riderText, 500),
+        }
+      : null,
     workoutName: compactString(snapshot.workoutName, 120),
     latestSample: latestSample
       ? {
@@ -378,7 +401,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         error:
-          "No live coach API key configured. Set LIVE_COACH_API_KEY, LLM_CALLS_API_KEY, or AI_GATEWAY_API_KEY.",
+          "No live coach API key configured. Set LIVE_COACH_API_KEY, OPENROUTER_API_KEY, or LLM_CALLS_API_KEY.",
       },
       { status: 503 }
     );
@@ -477,7 +500,7 @@ For "compress the rest of the workout to 10 minutes", preserve block order and r
 For "make the next 10 minutes easier/harder", return blocks covering about 600 seconds and preserve the rest only when it fits within the 30 block and 30 minute command limit.
 set_workout_plan accepts at most 30 blocks and at most 30 minutes total. If the rider asks to rewrite more than that, apply the best next 30 minutes and explain the scope briefly in reason.
 Use leadSeconds 0 to 5 for rider-requested changes so the UI reflects the new plan immediately or near-immediately.
-If intent is adaptive_plan, return set_workout_plan with 5 to 10 blocks covering roughly the requested horizonSeconds. The plan should usually change target watts when telemetry supports a change, not merely describe one.
+If intent is adaptive_plan, use snapshot.adaptiveRideIntent as the ride goal. Return set_workout_plan with 5 to 10 blocks covering roughly the requested horizonSeconds. The plan should usually change target watts when telemetry supports a change, not merely describe one. Respect requested duration, heart-rate goals, hard/easy intent, and rider notes over generic workout structure. Include a short rider-facing text field under 18 words explaining what changed and why. If the plan is effectively unchanged, say that it is holding steady and why.
 Never mention implementation details, APIs, agents, hooks, or JSON to the rider.
 If the rider reports pain, dizziness, chest pain, or wants to stop, lower intensity or stop escalating and send a safety-first cue.`,
       messages: userContent,

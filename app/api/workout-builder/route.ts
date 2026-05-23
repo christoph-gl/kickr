@@ -117,7 +117,7 @@ export async function POST(req: Request) {
       return NextResponse.json(
         {
           error:
-            "WORKOUT_BUILDER_API_KEY, LLM_CALLS_API_KEY, or AI_GATEWAY_API_KEY is not configured",
+            "WORKOUT_BUILDER_API_KEY, OPENROUTER_API_KEY, or LLM_CALLS_API_KEY is not configured",
         },
         { status: 500 }
       );

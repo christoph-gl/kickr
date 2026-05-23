@@ -5,12 +5,10 @@ import { z } from "zod";
 /** Shared OpenRouter credentials. */
 export const openRouterApiKey =
   process.env.OPENROUTER_API_KEY ||
-  process.env.LLM_CALLS_API_KEY ||
-  process.env.AI_GATEWAY_API_KEY;
+  process.env.LLM_CALLS_API_KEY;
 
 export const openRouterDefaultModel =
   process.env.LLM_CALLS_MODEL ||
-  process.env.AI_GATEWAY_MODEL ||
   "google/gemini-2.5-flash";
 
 export type ModelMessage = {
@@ -41,7 +39,6 @@ export function getOpenAIClient(apiKey?: string) {
     apiKey ||
     process.env.OPENROUTER_API_KEY ||
     process.env.LLM_CALLS_API_KEY ||
-    process.env.AI_GATEWAY_API_KEY ||
     openRouterApiKey;
   return new OpenAI({
     baseURL: "https://openrouter.ai/api/v1",
@@ -57,7 +54,6 @@ export function getOpenRouterModel(modelName?: string): string {
   return (
     modelName ||
     process.env.LLM_CALLS_MODEL ||
-    process.env.AI_GATEWAY_MODEL ||
     openRouterDefaultModel
   );
 }

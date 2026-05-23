@@ -56,7 +56,7 @@ Fresh-agent default path:
    WORKOUT_IMAGE_EXTRACTOR_MODEL=google/gemini-3-flash
    ```
 
-   Plain trainer control and workout playback work without these values. Text LLM lanes (live coach, workout builder, ride/monthly summaries) use `LLM_CALLS_API_KEY` / `LLM_CALLS_MODEL`, with optional per-lane overrides such as `LIVE_COACH_API_KEY` or `RIDE_SUMMARY_API_KEY`, then `AI_GATEWAY_API_KEY` / `AI_GATEWAY_MODEL` as a legacy fallback. Screenshot import uses only `WORKOUT_IMAGE_EXTRACTOR_*` (not `LLM_CALLS_*`).
+   Plain trainer control and workout playback work without these values. Text LLM lanes (live coach, workout builder, ride/monthly summaries) use OpenRouter through `OPENROUTER_API_KEY` or `LLM_CALLS_API_KEY`, with `LLM_CALLS_MODEL` as the shared model and optional per-lane overrides such as `LIVE_COACH_MODEL` or `RIDE_SUMMARY_MODEL`. Screenshot import can use `WORKOUT_IMAGE_EXTRACTOR_*` for its own image-capable lane.
 
    Do not create `.env.local` by blindly copying `.env.example`; leave optional placeholders unset unless you have real values.
 

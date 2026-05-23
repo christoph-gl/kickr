@@ -9,6 +9,8 @@
   "scripts": {
     "dev": "next dev --turbopack",
     "dev:portless": "portless run next dev --turbopack",
+    "dev:stop": "portless proxy stop || true",
+    "dev:reset": "portless proxy stop || true && portless prune",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",

@@ -21,6 +21,7 @@ import { Button } from "./ui/button";
 import { Trash2 } from "lucide-react";
 import { RIDER_PROFILE, type RiderProfile } from "@/lib/profile";
 import { audioService } from "@/lib/audio";
+import type { AgentCommand } from "@/lib/agent";
 import {
   Dialog,
   DialogContent,
@@ -93,6 +94,58 @@ type RemainingWorkoutSnapshot = {
   truncated: boolean;
 };
 
+type AdaptiveRideIntent = {
+  presetId: string;
+  label: string;
+  durationMinutes: number;
+  prompt: string;
+  riderText: string;
+};
+
+const ADAPTIVE_RIDE_PRESETS: Array<{
+  id: string;
+  label: string;
+  durationMinutes: number;
+  prompt: string;
+}> = [
+  {
+    id: "zone-2",
+    label: "Zone 2 Ride",
+    durationMinutes: 60,
+    prompt:
+      "Keep the rider in heart-rate Zone 2 for as long as possible. Adjust power gradually based on heart-rate drift, cadence, and perceived stability. Prefer steady endurance over power targets.",
+  },
+  {
+    id: "hiit-45",
+    label: "HIIT Ride",
+    durationMinutes: 45,
+    prompt:
+      "Build an interval session with warmup, repeated hard efforts, recoveries, and cooldown. Use current vitals to avoid overreaching if heart rate or cadence suggests fatigue.",
+  },
+  {
+    id: "tempo",
+    label: "Tempo Builder",
+    durationMinutes: 50,
+    prompt:
+      "Progress from easy endurance into controlled tempo, then cool down. Keep intensity below threshold unless vitals are unusually stable.",
+  },
+  {
+    id: "recovery",
+    label: "Recovery Spin",
+    durationMinutes: 35,
+    prompt:
+      "Keep the ride easy and restorative. Lower power quickly if heart rate rises unexpectedly or cadence becomes unstable.",
+  },
+];
+
+const DEFAULT_ADAPTIVE_RIDE_INTENT: AdaptiveRideIntent = {
+  presetId: ADAPTIVE_RIDE_PRESETS[0].id,
+  label: ADAPTIVE_RIDE_PRESETS[0].label,
+  durationMinutes: ADAPTIVE_RIDE_PRESETS[0].durationMinutes,
+  prompt: ADAPTIVE_RIDE_PRESETS[0].prompt,
+  riderText: "",
+};
+
 export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>(function WorkoutPlayer(
   {
     onPowerTargetChange,
@@ -125,6 +178,13 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
   const [isBuilderOpen, setIsBuilderOpen] = useState(false);
   const [builderInstructions, setBuilderInstructions] = useState("");
   const [builderRationale, setBuilderRationale] = useState<string | null>(null);
+  const [isAdaptiveSetupOpen, setIsAdaptiveSetupOpen] = useState(false);
+  const [adaptiveRideIntent, setAdaptiveRideIntent] = useState<AdaptiveRideIntent>(
+    DEFAULT_ADAPTIVE_RIDE_INTENT
+  );
+  const [adaptiveIntentDraft, setAdaptiveIntentDraft] = useState<AdaptiveRideIntent>(
+    DEFAULT_ADAPTIVE_RIDE_INTENT
+  );
   const [isBuildingWorkout, setIsBuildingWorkout] = useState(false);
   const [unsavedBuiltWorkoutId, setUnsavedBuiltWorkoutId] = useState<string | null>(null);
   const [isSavingBuiltWorkout, setIsSavingBuiltWorkout] = useState(false);
@@ -149,6 +209,7 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
   const liveCoachRunningRef = useRef(false);
   const initialLiveCoachRequestedRef = useRef(false);
   const lastLiveCoachCheckSecondRef = useRef(0);
+  const lastAdaptivePlanSecondRef = useRef(0);
   const coachSpeechRequestRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const zwoFileInputRef = useRef<HTMLInputElement>(null);
@@ -360,6 +421,7 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
       const { savedWorkouts, deletedWorkoutIds } = await getWorkoutLibrary();
       const deletedIds = new Set(deletedWorkoutIds);
       const visibleWorkouts = [
+        ADAPTIVE_FREERIDE,
         ...WORKOUTS.filter((savedWorkout) => !deletedIds.has(savedWorkout.id)),
         ...savedWorkouts.filter((savedWorkout) => !deletedIds.has(savedWorkout.id)),
       ];
@@ -381,8 +443,6 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
     }
     return () => clearInterval(interval);
   }, [isPlaying]);
-
-  // No automatic periodic coaching loop or ticker for Adaptive Freeride.
 
   useEffect(() => {
     if (!isPlaying) return;
@@ -478,6 +538,35 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
     setActualPowerSamples([]);
     setUpcomingChange(null);
     lastTargetRef.current = null;
+  };
+
+  const openAdaptiveSetup = () => {
+    setAdaptiveIntentDraft(adaptiveRideIntent);
+    setIsAdaptiveSetupOpen(true);
+  };
+
+  const handleAdaptivePresetSelect = (preset: (typeof ADAPTIVE_RIDE_PRESETS)[number]) => {
+    setAdaptiveIntentDraft((current) => ({
+      ...current,
+      presetId: preset.id,
+      label: preset.label,
+      durationMinutes: preset.durationMinutes,
+      prompt: preset.prompt,
+    }));
+  };
+
+  const handleLoadAdaptiveRide = () => {
+    const safeDuration = Math.max(10, Math.min(240, Math.round(adaptiveIntentDraft.durationMinutes)));
+    setAdaptiveRideIntent({ ...adaptiveIntentDraft, durationMinutes: safeDuration });
+    setWorkout({
+      ...ADAPTIVE_FREERIDE,
+      blocks: [{ durationSeconds: safeDuration * 60, targetPower: ADAPTIVE_FREERIDE.blocks[0].targetPower }],
+    });
+    setUnsavedBuiltWorkoutId(null);
+    setBuilderRationale(null);
+    handleStop();
+    setIsAdaptiveSetupOpen(false);
+    setIsPickerOpen(false);
   };
 
   const handleFinishSession = () => {
@@ -709,7 +798,30 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
     return snapshots.slice(-20);
   }, []);
 
-  const requestLiveCoachCheck = useCallback(async (intent: "ride_start_summary" | "periodic_ride_check") => {
+  const applyLiveCoachCommand = useCallback(
+    (command: AgentCommand | null | undefined, allowTrainerChanges: boolean) => {
+      if (!command || !allowTrainerChanges) return;
+
+      if (command.type === "set_workout_plan") {
+        applyPlanCommand(command.blocks, command.leadSeconds ?? 5);
+        return;
+      }
+
+      if (command.type === "set_erg_watts") {
+        applyErgOverrideUntilNextStep(command.watts);
+        onPowerTargetChange(command.watts);
+        return;
+      }
+
+      if (command.type === "set_trainer_mode" && command.mode === "erg") {
+        applyErgOverrideUntilNextStep(command.targetWatts);
+        onPowerTargetChange(command.targetWatts);
+      }
+    },
+    [applyErgOverrideUntilNextStep, applyPlanCommand, onPowerTargetChange]
+  );
+
+  const requestLiveCoachCheck = useCallback(async (intent: "ride_start_summary" | "periodic_ride_check" | "adaptive_plan") => {
     if (liveCoachRunningRef.current) return;
     liveCoachRunningRef.current = true;
     setLiveCoachStatus("checking");
@@ -742,6 +854,8 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
                 }
               : null,
             activeTrainerMode,
+            adaptivePlanHorizonSeconds: intent === "adaptive_plan" ? 10 * 60 : null,
+            adaptiveRideIntent: intent === "adaptive_plan" ? adaptiveRideIntent : null,
             riderProfile: {
               fourDP: riderProfile.fourDP,
               cTHR: riderProfile.cTHR,
@@ -789,6 +903,7 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
         audioService.playCoachMessage();
         void speakCoachText(text);
       }
+      applyLiveCoachCommand(data?.command, intent === "adaptive_plan");
       if (typeof data?.action?.reason === "string") {
         setLiveCoachDetail(data.action.reason);
       } else if (typeof data?.command?.reason === "string") {
@@ -804,6 +919,8 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
     }
   }, [
     activeTrainerMode,
+    adaptiveRideIntent,
+    applyLiveCoachCommand,
     buildTelemetrySnapshots,
     currentHrZone,
     elapsedSeconds,
@@ -816,7 +933,7 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
   useEffect(() => {
     if (!isPlaying) return;
 
-    if (elapsedSeconds === 0 && !initialLiveCoachRequestedRef.current) {
+    if (!adaptive && elapsedSeconds === 0 && !initialLiveCoachRequestedRef.current) {
       initialLiveCoachRequestedRef.current = true;
       void requestLiveCoachCheck("ride_start_summary");
       return;
@@ -840,6 +957,18 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
       { elapsedSeconds, power },
     ]);
 
+    if (adaptive) {
+      const shouldRequestAdaptivePlan =
+        elapsedSeconds >= 30 &&
+        (elapsedSeconds === 30 || elapsedSeconds - lastAdaptivePlanSecondRef.current >= 2 * 60);
+
+      if (shouldRequestAdaptivePlan && lastAdaptivePlanSecondRef.current !== elapsedSeconds) {
+        lastAdaptivePlanSecondRef.current = elapsedSeconds;
+        void requestLiveCoachCheck("adaptive_plan");
+      }
+      return;
+    }
+
     if (
       elapsedSeconds >= 5 * 60 &&
       elapsedSeconds % (5 * 60) === 0 &&
@@ -849,6 +978,7 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
       void requestLiveCoachCheck("periodic_ride_check");
     }
   }, [
+    adaptive,
     cadence,
     currentHrZone,
     elapsedSeconds,
@@ -864,6 +994,7 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
       telemetrySamplesRef.current = [];
       initialLiveCoachRequestedRef.current = false;
       lastLiveCoachCheckSecondRef.current = 0;
+      lastAdaptivePlanSecondRef.current = 0;
       liveCoachRunningRef.current = false;
       setLiveCoachStatus("idle");
       setLiveCoachFeedback(null);
@@ -898,6 +1029,88 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
           disabled={!builderInstructions.trim() || isBuildingWorkout}
         >
           {isBuildingWorkout ? "Building..." : "Build & Load"}
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  );
+
+  const renderAdaptiveSetupDialogContent = () => (
+    <DialogContent className="sm:max-w-2xl rounded-md">
+      <DialogHeader>
+        <DialogTitle>Adaptive Freeride</DialogTitle>
+        <DialogDescription>
+          Set the intent the live coach should adapt around.
+        </DialogDescription>
+      </DialogHeader>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {ADAPTIVE_RIDE_PRESETS.map((preset) => {
+          const selected = adaptiveIntentDraft.presetId === preset.id;
+          return (
+            <button
+              key={preset.id}
+              type="button"
+              onClick={() => handleAdaptivePresetSelect(preset)}
+              className={`rounded-md border p-3 text-left transition-colors ${
+                selected ? "border-primary bg-primary/5" : "bg-card hover:bg-muted/30"
+              }`}
+            >
+              <span className={`block text-sm font-bold ${selected ? "text-primary" : ""}`}>
+                {preset.label}
+              </span>
+              <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                {preset.prompt}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="grid gap-2">
+        <label className="text-xs font-medium text-muted-foreground" htmlFor="adaptive-duration">
+          Ride duration
+        </label>
+        <div className="flex items-center gap-2">
+          <input
+            id="adaptive-duration"
+            type="number"
+            min={10}
+            max={240}
+            step={5}
+            value={adaptiveIntentDraft.durationMinutes}
+            onChange={(event) =>
+              setAdaptiveIntentDraft((current) => ({
+                ...current,
+                durationMinutes: Number(event.target.value) || current.durationMinutes,
+              }))
+            }
+            className="h-9 w-24 rounded-md border border-input bg-transparent px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          />
+          <span className="text-sm text-muted-foreground">minutes</span>
+        </div>
+      </div>
+
+      <div className="grid gap-2">
+        <label className="text-xs font-medium text-muted-foreground" htmlFor="adaptive-notes">
+          Ride notes
+        </label>
+        <textarea
+          id="adaptive-notes"
+          value={adaptiveIntentDraft.riderText}
+          onChange={(event) =>
+            setAdaptiveIntentDraft((current) => ({ ...current, riderText: event.target.value }))
+          }
+          placeholder="Example: keep me below 150 bpm, or make it hard if HR stays controlled."
+          className="min-h-24 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        />
+      </div>
+
+      <DialogFooter>
+        <Button variant="outline" onClick={() => setIsAdaptiveSetupOpen(false)}>
+          Cancel
+        </Button>
+        <Button onClick={handleLoadAdaptiveRide} disabled={isPlaying}>
+          Load Adaptive Ride
         </Button>
       </DialogFooter>
     </DialogContent>
@@ -943,17 +1156,15 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
           <Button
             variant={adaptive ? "default" : "outline"}
             size="sm"
-            onClick={() => {
-              setWorkout(ADAPTIVE_FREERIDE);
-              setUnsavedBuiltWorkoutId(null);
-              setBuilderRationale(null);
-              handleStop();
-            }}
+            onClick={openAdaptiveSetup}
             disabled={isPlaying}
-            title="Load a flexible freeride plan that starts at 80 W."
+            title="Choose an adaptive ride intent."
           >
-            {adaptive ? "Adaptive Loaded" : "Adaptive Freeride"}
+            {adaptive ? adaptiveRideIntent.label : "Adaptive Freeride"}
           </Button>
+          <Dialog open={isAdaptiveSetupOpen} onOpenChange={setIsAdaptiveSetupOpen}>
+            {renderAdaptiveSetupDialogContent()}
+          </Dialog>
           <Dialog open={isBuilderOpen} onOpenChange={setIsBuilderOpen}>
             <DialogTrigger asChild>
               <Button
@@ -1024,6 +1235,11 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
                         isActive ? "bg-primary/5 border-primary shadow-sm" : "bg-card hover:bg-muted/30"
                       }`}
                       onClick={() => {
+                        if (isAdaptiveFreeride(w)) {
+                          setIsPickerOpen(false);
+                          openAdaptiveSetup();
+                          return;
+                        }
                         setWorkout(w);
                         setUnsavedBuiltWorkoutId(null);
                         setBuilderRationale(null);

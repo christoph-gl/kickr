@@ -271,7 +271,7 @@ export async function summarizeRideSession(
   if (!rideSummaryApiKey) {
     return {
       status: "skipped",
-      error: "RIDE_SUMMARY_API_KEY, LLM_CALLS_API_KEY, or AI_GATEWAY_API_KEY is not configured",
+      error: "RIDE_SUMMARY_API_KEY, OPENROUTER_API_KEY, or LLM_CALLS_API_KEY is not configured",
     };
   }
 
