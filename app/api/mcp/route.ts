@@ -584,7 +584,7 @@ const handler = createMcpHandler(
     );
   },
   {
-    serverInfo: { name: "iamnotadoctor", version: "0.5.0" },
+    serverInfo: { name: "iamnotadoctor", version: "0.6.0" },
     instructions: MCP_INSTRUCTIONS,
   }
 );

@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.6] - 2026-11-01
 
 ### Changed
 - MCP `build_workout` now works like the app's Build button: it saves the built workout to the library and loads it into the open app tab (not started) by default, so an agent can set up a ride session in one call. Pass `save: false` / `load: false` to opt out; the result reports `saved` and `loaded`.
