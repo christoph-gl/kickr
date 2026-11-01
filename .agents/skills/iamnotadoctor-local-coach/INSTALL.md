@@ -88,7 +88,7 @@ mkdir -p "$AGENT_SKILLS_DIR/iamnotadoctor-local-coach"
 cp .agents/skills/iamnotadoctor-local-coach/dist/agent-skill.md \
    "$AGENT_SKILLS_DIR/iamnotadoctor-local-coach/SKILL.md"
 head -2 "$AGENT_SKILLS_DIR/iamnotadoctor-local-coach/SKILL.md"
-# should print: iamnotadoctor-skill-version: 9
+# should print: iamnotadoctor-skill-version: 10
 ```
 
 If you cannot read the repo files directly (for example a cloud agent and the repo lives on the user's machine), fetch the same file from `https://raw.githubusercontent.com/christoph-gl/iamnotadoctor/public-facing/.agents/skills/iamnotadoctor-local-coach/dist/agent-skill.md`.

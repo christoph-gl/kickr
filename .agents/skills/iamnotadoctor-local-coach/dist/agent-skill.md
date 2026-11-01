@@ -1,5 +1,5 @@
 ---
-iamnotadoctor-skill-version: 9
+iamnotadoctor-skill-version: 10
 name: iamnotadoctor-local-fitness-tracker
 description: Help a rider use their iamnotadoctor cycling app from an agent - ride history and stats, in-app LLM ride summaries, rider profile and memory, workouts, and trainer control on request. Uses the app's MCP server (or HTTP), locally or on the rider's own domain.
 ---
@@ -55,9 +55,20 @@ Trainer control is only available over MCP.
 
 Each saved ride may carry `llmSummary` (headline, summary, key observations, HR-zone and training-load assessment, data-quality notes, suggested next focus, `memoryCandidate`). Use it as the primary narrative source. If `llmSummaryStatus` is `skipped` or `failed`, summarize conservatively from metrics and rider comments. Use `get_ride_stats` for weekly/monthly load questions instead of adding up rides yourself.
 
+## Setting Up a Ride
+
+When the rider asks for a workout for today ("45 min endurance, legs are tired"):
+
+1. Call `get_trainer_status` to see whether the app tab is open.
+2. Call `build_workout` with the rider's words as `instructions`. It uses the rider profile and the last five rides, saves the workout to the library and loads it into the open tab's player (not started). Pass `save: false` for a one-off, `load: false` to only prepare it.
+3. Tell the rider the workout name, duration, TSS/IF and the `rationale`. If `loaded.ok` is false, the workout is in the library: ask them to open the app (signing in when hosted), connect the trainer and pick it there, or call `load_workout` with its id once the tab is open.
+4. Call `start_workout` only when the rider says they are ready.
+
+To use a workout the rider describes exactly (fixed blocks), use `save_workout` or `load_workout` with `blocks` instead of the AI builder.
+
 ## Trainer Control
 
-Only when the rider asks, and one command per request:
+Only when the rider asks, and one command per request (the ride setup above counts as one request):
 
 1. Call `get_trainer_status` first. If `appTabConnected` is false or `trainerConnection` is not `"connected"`, ask the rider to open the app in Chrome or Edge (signing in when hosted) and click **Connect**. You cannot connect Bluetooth.
 2. Then send the command. While a workout plays, `set_erg_power` overrides the target only until the next workout step.

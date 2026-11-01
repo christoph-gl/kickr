@@ -144,6 +144,14 @@ const workoutBlocks = z
   .min(1)
   .max(200);
 
+// Sent to every MCP client on initialize; the full operating rules are in
+// .agents/skills/iamnotadoctor-local-coach/dist/agent-skill.md.
+const MCP_INSTRUCTIONS = `iamnotadoctor is a smart-trainer cycling app. The app tab in the rider's browser owns Bluetooth, the workout player and live coaching; these tools read ride history and the rider profile, manage workouts, and relay trainer commands to that tab.
+
+Setting up a ride ("45 min endurance today"): call get_trainer_status, then build_workout with the rider's words. It saves the workout and loads it into the open tab (not started). Tell the rider the name, duration, TSS/IF and rationale. If loaded.ok is false, ask them to open the app and connect the trainer; the workout is in the library (load_workout with its id). Call start_workout only when the rider says they are ready.
+
+Rules: control the trainer only when the rider asks, one request at a time, never in a loop. You cannot connect Bluetooth. Confirm with the rider before finish_ride, discard_ride, delete_ride and delete_workout, and before writing update_rider_memory. Use get_ride_stats for load questions instead of summing rides. No medical advice.`;
+
 async function runTrainerCommand(command: TrainerBridgeCommandInput, successMessage: string) {
   const result = await sendTrainerCommand(command);
   if (!result.ok) return fail(result.message ?? "Command failed.");
@@ -575,7 +583,10 @@ const handler = createMcpHandler(
       async () => runTrainerCommand({ type: "discard_ride" }, "Ride discarded.")
     );
   },
-  { serverInfo: { name: "iamnotadoctor", version: "0.5.0" } }
+  {
+    serverInfo: { name: "iamnotadoctor", version: "0.5.0" },
+    instructions: MCP_INSTRUCTIONS,
+  }
 );
 
 export { handler as GET, handler as POST, handler as DELETE };
