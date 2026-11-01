@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+- MCP `build_workout` now works like the app's Build button: it saves the built workout to the library and loads it into the open app tab (not started) by default, so an agent can set up a ride session in one call. Pass `save: false` / `load: false` to opt out; the result reports `saved` and `loaded`.
+
+### Fixed
+- The AI workout builder failed with "400 Provider returned error" on Gemini models (`~google/gemini-flash-latest`), which reject `maxItems` in the structured-output schema. The 80-block limit is now checked after parsing.
+
 ## [0.5] - 2026-11-01
 
 ### Added

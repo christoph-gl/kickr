@@ -30,7 +30,8 @@ const WorkoutBuilderSchema = z.object({
       })
     )
     .min(1)
-    .max(80),
+    // Checked after parsing, not sent as maxItems: Gemini rejects that keyword with a 400.
+    .refine((blocks) => blocks.length <= 80, "Use at most 80 blocks"),
 });
 
 function compactSession(session: ReturnType<typeof listRideSessions>[number]) {

@@ -398,14 +398,26 @@ const handler = createMcpHandler(
       {
         title: "Build workout with AI",
         description:
-          "Draft an ERG workout from rider instructions using the rider profile and the last five rides. Returns a draft; it is not saved. Requires an LLM API key.",
+          "Build an ERG workout from rider instructions using the rider profile and the last five rides, the same as the app's Build button. By default it is saved to the library and loaded into the open app tab, ready for the rider to press Play; without an open tab the rider finds it in the library. Requires an LLM API key.",
         inputSchema: z.object({
           instructions: z.string().min(1).describe('e.g. "45 min endurance, legs are tired"'),
+          save: z.boolean().default(true).describe("Save the workout to the library"),
+          load: z
+            .boolean()
+            .default(true)
+            .describe("Load it into the app tab's player (not started) if a tab is open"),
         }),
       },
-      async ({ instructions }) => {
+      async ({ instructions, save, load }) => {
         try {
-          return json(await buildWorkout(instructions));
+          const result = await buildWorkout(instructions);
+          if (save) await writeWorkout(result.workout);
+          let loaded: { ok: boolean; message?: string } = { ok: false, message: "Not requested." };
+          if (load) {
+            const command = await sendTrainerCommand({ type: "load_workout", workout: result.workout });
+            loaded = { ok: command.ok, message: command.ok ? `Loaded "${result.workout.name}".` : command.message };
+          }
+          return json({ ...result, saved: save, loaded });
         } catch (error) {
           return fail(error instanceof Error ? error.message : String(error));
         }

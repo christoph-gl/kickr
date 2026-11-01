@@ -35,7 +35,7 @@ Put numeric age in `age`, explicitly given weight/gender/cTHR/4DP in their field
 | Rider | `get_rider_profile`, `update_rider_profile`, `update_rider_memory` |
 | Ride history | `list_rides` (date range, workout name, paging), `get_ride` (full LLM evaluation, optional downsampled samples), `get_ride_stats` (totals, optionally per week or month), `delete_ride` |
 | Rollups | `list_monthly_summaries`, `generate_monthly_summary` |
-| Workouts | `list_workouts`, `get_workout`, `build_workout` (AI draft, not saved), `save_workout`, `delete_workout` |
+| Workouts | `list_workouts`, `get_workout`, `build_workout` (AI build like the app's Build button; saves to the library and loads it into the open tab by default, `save`/`load` to opt out), `save_workout`, `delete_workout` |
 | Trainer | `get_trainer_status`, `set_erg_power`, `set_resistance`, `load_workout`, `start_workout`, `pause_workout`, `seek_workout`, `finish_ride`, `discard_ride` |
 
 ## HTTP Fallback
