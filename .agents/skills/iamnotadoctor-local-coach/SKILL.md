@@ -1,56 +1,45 @@
 ---
 name: iamnotadoctor-local-coach
-description: Use when integrating a local agent with this iamnotadoctor app for optional post-ride fitness tracking, rider onboarding, ride-summary export, or rider memory updates.
+description: Use when integrating an agent with this iamnotadoctor app - choosing Local or Hosted setup, connecting over MCP or HTTP, rider onboarding, ride history and summaries, rider memory, workouts, or trainer control on request.
 ---
 
-# iamnotadoctor Local Fitness Tracking Helper
+# iamnotadoctor Agent Integration
 
-The iamnotadoctor app owns Bluetooth, workouts, live coaching, workout building, and ride-summary LLM calls. External agents are optional helpers for slower personal tracking workflows after rides.
+The iamnotadoctor app owns Bluetooth, the workout player, live coaching, workout building, and ride-summary LLM calls. Agents connect over the app's MCP server (`/api/mcp`) or HTTP endpoints, either locally or on the rider's own domain.
 
-## If You Are An External Agent Pointed At This Repo
+## If You Are An Agent Pointed At This Repo
 
-Do not operate from this authoring file at runtime. Install the lean portable skill into your own workspace:
+Do not operate from this authoring file at runtime:
 
-1. Read [INSTALL.md](INSTALL.md).
-2. Copy [`dist/agent-skill.md`](dist/agent-skill.md).
+1. Read [INSTALL.md](INSTALL.md). It starts by explaining the **Local** and **Hosted** setups and their trade-offs; let the user choose.
+2. Set up the chosen path, connect to `/api/mcp`, and copy [`dist/agent-skill.md`](dist/agent-skill.md) into your skills directory.
 3. Ask the rider for first-run onboarding context: age, broad fitness level, cycling background, goals, and constraints.
 4. Stop reading this repo. Use the installed skill for future turns.
 
-## Current Agent Scope
+## Agent Scope
 
 Agents may:
 
-- read rider profile with `GET /api/rider`
-- update approved profile fields with `PUT /api/rider`
-- update approved `memorySummary` with `PATCH /api/rider/memory`
-- read completed rides with `GET /api/sessions`
-- use `llmSummary` and `llmSummary.memoryCandidate` from saved rides as the primary post-ride learning source
-- help the rider add ride results to personal fitness tracking systems
+- read and update the rider profile and `memorySummary` (with approval)
+- query saved rides, ride stats, LLM ride summaries, and monthly summaries
+- list, build, save, and delete workouts
+- control the trainer through the MCP trainer tools when the rider asks, via the open app tab
 
 Agents must not:
 
-- control trainer watts, resistance, routes, or workouts
 - talk directly to Bluetooth or FTMS
 - read/write `.data/iamnotadoctor.sqlite`
+- run high-frequency loops against trainer tools; live in-ride coaching belongs to the app
 - update FTP, cTHR, HR zones, or other rider-entered values without explicit confirmation
+- print or commit the hosted `APP_AUTH_TOKEN`
 
-## Fresh Agent Discovery
+## Authoring Notes
 
-1. Confirm the base URL:
-
-   ```bash
-   BASE_URL="$(portless get iamnotadoctor 2>/dev/null || printf http://localhost:3000)"
-   ```
-
-2. Smoke-check:
-
-   ```bash
-   curl -sf "$BASE_URL/api/rider"
-   curl -sf "$BASE_URL/api/sessions"
-   ```
-
-3. If this is first install, collect age and fitness context, then update `memorySummary` and any explicitly provided supported fields.
+- `dist/agent-skill.md` is the self-contained operating contract. Bump its `iamnotadoctor-skill-version` whenever the contract changes so installed copies detect drift.
+- Keep app internals (FTMS, SQLite schema, player internals) out of the dist skill; they live in `AGENTS.md`.
 
 ## References
 
-- [references/api.md](references/api.md) - current HTTP API contract for rider profile and sessions
+- [INSTALL.md](INSTALL.md) - setup choice, Local and Hosted steps, agent connection, onboarding
+- [`docs/HOSTING.md`](../../../docs/HOSTING.md) - full hosted setup
+- [references/api.md](references/api.md) - HTTP API contract for rider profile and sessions

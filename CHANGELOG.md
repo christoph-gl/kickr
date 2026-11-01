@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5] - 2026-11-01
+
+### Added
+- MCP server at `/api/mcp` (Streamable HTTP via `mcp-handler`) with 23 tools: rider profile and memory, ride history (filter by date or workout, full LLM evaluation, downsampled telemetry), ride statistics overall or per week or month, monthly summaries, workout library (list, inspect, AI-build, save, delete), and trainer control.
+- Trainer control for agents through the open app tab: set ERG watts or resistance, load, start, pause or seek a workout, finish and save or discard the ride. The tab relays queued commands via `/api/trainer-bridge`; Bluetooth stays in the browser.
+- Hosted mode as a second official setup next to local: setting `APP_AUTH_TOKEN` protects every page and API route. Browsers sign in once at `/login` (30-day session), agents send the token as a bearer token. See `docs/HOSTING.md`.
+- `docs/HOSTING.md`: comparison of the local and hosted setups and a step-by-step guide (service, HTTPS reverse proxy, verification, maintenance).
+
+### Changed
+- Local mode now only answers requests addressed to `localhost`, blocking other websites from reaching the app's APIs.
+- Agent onboarding (README, `AGENTS.md`, skill `INSTALL.md`) starts by explaining the local and hosted setups and letting the user choose. The portable agent skill is now version 9: MCP first, hosted token handling, trainer control on rider request.
+- The upcoming-target countdown is now a horizontal bar above the ERG slider that fills over the last 10 seconds before a power change.
+- Workout file storage and the AI workout builder moved into shared server helpers (`lib/workout-store.ts`, `lib/workout-builder.ts`) used by both the HTTP routes and MCP tools.
+
 ## [0.4] - 2026-10-04
 
 ### Changed

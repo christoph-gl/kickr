@@ -10,27 +10,32 @@ Whenever changes are pushed to the `public-facing` branch:
 - Add or update the corresponding dated release entry in `CHANGELOG.md`.
 - Keep the README version and changelog release number aligned.
 
-The current public-facing release is version `0.4`.
+The current public-facing release is version `0.5`.
 
 ## Fresh Public-URL Agent Behavior
 
-If the user gives only the public GitHub URL, or says “try this again”, “implement it”, “first”, or similar after sharing the URL, assume they want the first useful setup path:
+If the user gives only the public GitHub URL, or says “try this again”, “implement it”, “first”, or similar after sharing the URL, assume they want the first useful setup path. Follow `.agents/skills/iamnotadoctor-local-coach/INSTALL.md`:
 
-1. Clone/open the repo.
-2. Install dependencies with `npm install`.
-3. Start the iamnotadoctor app locally.
-4. Verify `GET /api/rider`.
-5. Install the lean portable skill from `.agents/skills/iamnotadoctor-local-coach/dist/agent-skill.md` only if the user wants an optional external fitness-tracking agent.
-6. Guide the user through browser Bluetooth connection. If installing an external agent, have it ask for age, broad fitness level, goals, and constraints.
+1. **Explain both official setups and let the user choose** (pros and cons are in README → “For Agents Given This URL” and in `docs/HOSTING.md` → “Choosing a setup”):
+   - **Local** (default): the app runs on the computer next to the trainer at `http://localhost:3000`; no login; only agents on that computer can use it.
+   - **Hosted**: the app runs on an always-on server on the user's own HTTPS domain with `APP_AUTH_TOKEN`; any agent (including cloud bots) can use it with the token; more setup and exposure.
+   Recommend Local unless the agent runs on a different machine than the trainer or the user wants ride history reachable while their riding computer is off. If you are a cloud-hosted agent, say that Local only works for you if the user also runs an agent on their own computer.
+2. Clone/open the repo and run `npm install` (on the trainer computer for Local, on the server for Hosted).
+3. Local: `npm run dev`. Hosted: follow `docs/HOSTING.md` (token in `.env.local`, `npm run build`, service, HTTPS reverse proxy).
+4. Verify `GET /api/rider` (Hosted: with `Authorization: Bearer <token>`; without it the app must answer 401).
+5. Guide the user through browser Bluetooth connection in Chrome or Edge on the device next to the trainer (Hosted: sign in with the token first).
+6. If the user wants an agent to use the app, connect it to `/api/mcp` and/or install the portable skill from `.agents/skills/iamnotadoctor-local-coach/dist/agent-skill.md`, then ask for age, broad fitness level, goals, and constraints.
 
-Do not ask “implement what?” for this bootstrap request. Ask a narrow question only when needed, such as where to clone the repo or whether the user wants the optional local fitness-tracking helper.
+Do not ask “implement what?” for this bootstrap request. Ask a narrow question only when needed, such as which setup they want, where to clone the repo, or their domain name.
 
 Fresh setup footguns:
-- Do not run `cp .env.example .env.local`; `.env.example` contains optional placeholders, not runnable secrets.
+- Do not run `cp .env.example .env.local`; `.env.example` contains optional placeholders, not runnable secrets. Only Hosted needs `APP_AUTH_TOKEN`; setting it locally turns on the login.
 - Do not append `-- --turbopack` to `npm run dev`; the script already includes Turbopack.
 - Do not decide the server failed after a short wait. First Next.js compile can take 30-90 seconds.
 - Probe `http://localhost:3000/api/rider` or `https://iamnotadoctor.localhost/api/rider`, not just the root page.
 - Web Bluetooth must be completed by the user in Chrome or Edge via UI button clicks.
+- Do not deploy to serverless platforms (Vercel, Netlify, Lambda): SQLite, workout files and the in-memory trainer bridge need one long-running Node process.
+- Never print or commit `APP_AUTH_TOKEN`; tell the user where it is (`.env.local` on the server).
 
 ## Context & Domain
 
@@ -90,7 +95,7 @@ Communication relies heavily on the **Web Bluetooth API** (`navigator.bluetooth`
 
 ## Local Agent / LLM Control Architecture
 
-The architecture intentionally does **not** expose an MCP server. The browser remains the Bluetooth owner. The Next.js app exposes small local HTTP endpoints that optional external agents can use for rider profile and completed ride history.
+The browser remains the Bluetooth owner. The Next.js app exposes small local HTTP endpoints that optional external agents can use for rider profile and completed ride history, plus a local MCP server at `/api/mcp` (see **MCP Server** below) that also relays trainer commands to the open app tab.
 
 ### Three layers, three audiences
 
@@ -106,12 +111,27 @@ External-agent setup is agent-only: do not edit the iamnotadoctor Next.js app; u
 
 ### Base URL
 
-When the app is started with Portless, prefer the stable project URL `https://iamnotadoctor.localhost`. Discover it with `portless get iamnotadoctor`. If Portless is not running or the HTTPS certificate is not trusted by the calling process, fall back to the direct dev-server URL such as `http://localhost:3000`.
+**Local setup:** when the app is started with Portless, prefer the stable project URL `https://iamnotadoctor.localhost`. Discover it with `portless get iamnotadoctor`. If Portless is not running or the HTTPS certificate is not trusted by the calling process, fall back to the direct dev-server URL such as `http://localhost:3000`.
+
+**Hosted setup:** the user's own domain, e.g. `https://kickr.example.com`, with `Authorization: Bearer <APP_AUTH_TOKEN>` on every request.
 
 ### Browser Ownership
 - The browser tab owns Web Bluetooth and sends FTMS commands.
-- External agents should not attempt to talk directly to the trainer.
-- Do not document or build new external-agent behavior that controls trainer watts, routes, workouts, or live coaching unless the user explicitly asks to revive that architecture and you also add an explicit client surface for it.
+- External agents never talk to the trainer directly. The only supported trainer-control path for agents is the MCP trainer tools, which queue commands through `lib/trainer-bridge.ts`; the open app tab executes them with the same functions the UI buttons use.
+- Live in-app coaching still belongs to `/api/coach/live`. Do not add other external-agent trainer paths.
+
+### MCP Server
+- `app/api/mcp/route.ts` serves a Streamable HTTP MCP server via `mcp-handler` (MCP SDK v2, `@modelcontextprotocol/server`). Connect clients to `http://localhost:3000/api/mcp` (or `https://iamnotadoctor.localhost/api/mcp`) locally, or `https://<domain>/api/mcp` with the bearer token when hosted.
+- Data tools reuse the same server helpers as the HTTP routes: `lib/db.ts`, `lib/rider-profile-validation.ts`, `lib/workout-store.ts` (workout JSON files), `lib/workout-builder.ts`, and `lib/monthly-summary.ts`. Keep route handlers and MCP tools on these shared helpers rather than duplicating logic.
+- Tools: `get_rider_profile`, `update_rider_profile`, `update_rider_memory`, `list_rides`, `get_ride` (optional downsampled samples), `get_ride_stats` (optionally grouped by ISO week or month), `delete_ride`, `list_monthly_summaries`, `generate_monthly_summary`, `list_workouts`, `get_workout`, `build_workout`, `save_workout`, `delete_workout`, plus trainer tools `get_trainer_status`, `set_erg_power`, `set_resistance`, `load_workout`, `start_workout`, `pause_workout`, `seek_workout`, `finish_ride`, `discard_ride`.
+- **Trainer bridge:** `lib/trainer-bridge.ts` keeps an in-memory (per server process) command queue and the latest tab status. `app/page.tsx` polls `POST /api/trainer-bridge` about once per second with live status and command results, and runs commands through `WorkoutPlayerHandle.remote` in `components/workout-player.tsx`. Commands fail fast when no tab has synced in the last 5 s and time out after 10 s. Only one tab should be open; the first one to poll picks up a command.
+
+### Access Control (Local vs Hosted)
+- `APP_AUTH_TOKEN` selects the mode; `proxy.ts` enforces it for every page and API route, using helpers in `lib/access-control.ts`. Route handlers do not repeat the check.
+- **Local** (unset): only requests whose Host and Origin are local (localhost, 127.0.0.1, ::1, *.localhost) are served; everything else gets 404. This blocks other websites and DNS rebinding from driving the trainer.
+- **Hosted** (set): every request needs `Authorization: Bearer <token>` (agents, MCP) or the `inad_session` cookie. `/login` + `POST /api/auth/login` exchange the token for an httpOnly cookie holding an HMAC of the token (30 days, `Secure` over HTTPS, `SameSite=Lax`); cookie requests with a foreign `Origin` are rejected. Unauthenticated pages redirect to `/login` on the forwarded public host; APIs answer 401.
+- Hosted mode assumes one long-running `next start` process behind an HTTPS reverse proxy that forwards `Host`/`X-Forwarded-Host` and `X-Forwarded-Proto`. Setup lives in `docs/HOSTING.md`.
+- New routes are protected automatically by the proxy matcher; only add paths to `PUBLIC_PATHS` in `proxy.ts` if they must work before sign-in.
 
 ### External Agent Tracking Endpoints
 - `GET /api/rider` returns the current rider profile.
@@ -120,7 +140,7 @@ When the app is started with Portless, prefer the stable project URL `https://ia
 - `GET /api/sessions` returns saved ride summaries with metrics, sample count, rider comments, and in-app LLM summaries, but not raw samples.
 - `GET /api/sessions/:id` returns one full saved ride with samples when raw telemetry is needed.
 - `GET /api/monthly-summaries` returns rollups when available.
-- These local endpoints do not require authentication.
+- Locally these endpoints need no authentication; in Hosted mode they need the bearer token.
 
 On first install, an external agent should ask the rider for age, broad fitness level, cycling background, goals, and constraints. Store numeric age in `age` and qualitative fitness context in `memorySummary`. Store weight, gender, cTHR, or 4DP values only when the rider explicitly provides them.
 
@@ -128,7 +148,7 @@ Completed ride summaries may include `llmSummaryStatus` and `llmSummary`. Agents
 
 ### Live Coaching Boundary
 - Use `POST /api/coach/live` for in-ride, latency-sensitive app feedback. For preplanned workouts, `ride_start_summary` and `periodic_ride_check` are text-only and must not adapt the workout or trainer load.
-- Keep external agents out of live trainer control. External agents are for post-ride tracking, rider memory, and exporting completed ride results.
+- External agents may control the trainer only through the MCP trainer tools, which the rider drives from their agent. They must not run high-frequency loops; in-app coaching stays with `/api/coach/live`.
 
 ### Rider Profile
 The rider profile is seeded from `DEFAULT_RIDER_PROFILE` and stored in SQLite. It currently includes:
@@ -145,7 +165,7 @@ The settings cog in the app opens a modal for manual profile editing. External a
 ### Important Future Agent Rules
 - Do not put FTMS byte encoding in prompts or agent glue.
 - Avoid high-frequency external-agent loops. Use `/api/coach/live` for in-app ride feedback and let the app handle real-time trainer execution.
-- Use `/api/rider`, `/api/sessions`, and `/api/monthly-summaries` as the external-agent context surface.
+- Use `/api/mcp`, or `/api/rider`, `/api/sessions`, and `/api/monthly-summaries`, as the external-agent context surface.
 - Prefer adding new server routes or DB helpers over reading `.data/iamnotadoctor.sqlite` directly from external scripts.
 
 ## UI/UX Rules

@@ -43,6 +43,27 @@ export type WorkoutPlayerHandle = {
   applyPlanCommand: (blocks: WorkoutBlock[], leadSeconds?: number, preserveFollowingTrack?: boolean) => void;
   applyErgOverrideUntilNextStep: (watts: number) => void;
   getRemainingWorkoutSnapshot: () => RemainingWorkoutSnapshot;
+  remote: WorkoutPlayerRemote;
+};
+
+/** Controls used by the MCP trainer bridge; each returns an error message or null on success. */
+export type WorkoutPlayerRemote = {
+  getStatus: () => {
+    id: string;
+    name: string;
+    durationSeconds: number;
+    isPlaying: boolean;
+    elapsedSeconds: number;
+    currentTargetWatts: number | null;
+    nextTargetWatts: number | null;
+    secondsToNextTarget: number | null;
+  };
+  loadWorkout: (workout: Workout) => string | null;
+  play: () => string | null;
+  pause: () => string | null;
+  seek: (seconds: number) => string | null;
+  finish: (comments?: string) => string | null;
+  discard: () => string | null;
 };
 
 export type PowerDisplay = {
@@ -538,15 +559,59 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
     };
   }, [adaptive, adaptiveRideIntent.durationMinutes, elapsedSeconds, isPlaying, workout]);
 
-  useImperativeHandle(
-    ref,
-    () => ({
-      applyPlanCommand,
-      applyErgOverrideUntilNextStep,
-      getRemainingWorkoutSnapshot,
-    }),
-    [applyErgOverrideUntilNextStep, applyPlanCommand, getRemainingWorkoutSnapshot]
-  );
+  // Rebuilt every render so the remote controls always see current player state.
+  useImperativeHandle(ref, () => ({
+    applyPlanCommand,
+    applyErgOverrideUntilNextStep,
+    getRemainingWorkoutSnapshot,
+    remote: {
+      getStatus: () => ({
+        id: workout.id,
+        name: workout.name,
+        durationSeconds: totalDuration,
+        isPlaying,
+        elapsedSeconds,
+        currentTargetWatts: currentTargetPower,
+        nextTargetWatts: nextPowerTarget,
+        secondsToNextTarget: changeSeconds,
+      }),
+      loadWorkout: (next) => {
+        if (isPlaying) return "Pause or finish the current ride before loading another workout.";
+        if (isAdaptiveFreeride(next)) return "Adaptive Freeride needs its setup dialog; start it from the app.";
+        selectWorkout(next);
+        return null;
+      },
+      play: () => {
+        if (isPlaying) return null;
+        if (disabled) return "Connect the trainer before starting the workout.";
+        if (!adaptive && elapsedSeconds >= totalDuration) return "The workout has already ended.";
+        handlePlayPause();
+        return null;
+      },
+      pause: () => {
+        if (isPlaying) handlePlayPause();
+        return null;
+      },
+      seek: (seconds) => {
+        if (adaptive) return "Seeking is not available during Adaptive Freeride.";
+        handleSeek(Math.max(0, Math.min(totalDuration - 1, Math.round(seconds))));
+        return null;
+      },
+      finish: (comments) => {
+        if (elapsedSeconds === 0) return "No ride in progress to finish.";
+        stopAdaptiveVoiceRecording();
+        setIsFinishOpen(false);
+        setFinishComments("");
+        onStopSession(workout.name, comments?.trim() || undefined);
+        handleStop();
+        return null;
+      },
+      discard: () => {
+        handleDiscardRide();
+        return null;
+      },
+    },
+  }));
 
   // Wake Lock implementation
   const requestWakeLock = async () => {
@@ -824,6 +889,17 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
     lastTargetRef.current = null;
     lastUpcomingNotificationKeyRef.current = null;
     clearRideRuntimeState();
+  };
+
+  const selectWorkout = (next: Workout) => {
+    setWorkout(next);
+    if (isPowerProfileTest(next)) {
+      onResistanceModeRequest?.(next.resistanceLevel ?? 20);
+    }
+    setUnsavedBuiltWorkoutId(null);
+    setBuilderRationale(null);
+    handleStop();
+    setIsPickerOpen(false);
   };
 
   const handleDiscardRide = () => {
@@ -1890,14 +1966,7 @@ export const WorkoutPlayer = forwardRef<WorkoutPlayerHandle, WorkoutPlayerProps>
                           openAdaptiveSetup();
                           return;
                         }
-                        setWorkout(w);
-                        if (isPowerProfileTest(w)) {
-                          onResistanceModeRequest?.(w.resistanceLevel ?? 20);
-                        }
-                        setUnsavedBuiltWorkoutId(null);
-                        setBuilderRationale(null);
-                        handleStop();
-                        setIsPickerOpen(false);
+                        selectWorkout(w);
                       }}
                     >
                       <div className="flex justify-between items-start gap-3">

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Cog, History, Info, Trash2 } from "lucide-react";
 import { getRiderProfile, RIDER_PROFILE, saveRiderProfile, type RiderProfile } from "@/lib/profile";
 import { WorkoutPlayer, type WorkoutPlayerHandle, type PowerDisplay } from "@/components/workout-player";
+import type { TrainerBridgeCommand, TrainerBridgeResult, TrainerBridgeStatus } from "@/lib/trainer-bridge";
 import { 
   RideSession, 
   saveRideSession, 
@@ -341,6 +342,94 @@ export default function App() {
 
     await applyTargetPower(watts);
   }
+
+  // MCP trainer bridge: report live status to the server and run queued commands.
+  async function executeBridgeCommand(command: TrainerBridgeCommand): Promise<string | null> {
+    const player = workoutPlayerRef.current?.remote;
+    switch (command.type) {
+      case "set_erg_power": {
+        if (connectionState !== "connected") return "Trainer is not connected.";
+        setMode("erg");
+        if (player?.getStatus().isPlaying) {
+          workoutPlayerRef.current?.applyErgOverrideUntilNextStep(command.watts);
+        } else {
+          await setTrainerTargetPower(command.watts);
+        }
+        return null;
+      }
+      case "set_resistance":
+        if (connectionState !== "connected") return "Trainer is not connected.";
+        setMode("resistance");
+        await setTrainerResistance(command.level);
+        return null;
+      case "load_workout":
+        return player ? player.loadWorkout(command.workout) : "Workout player is not ready.";
+      case "play_workout":
+        return player ? player.play() : "Workout player is not ready.";
+      case "pause_workout":
+        return player ? player.pause() : "Workout player is not ready.";
+      case "seek_workout":
+        return player ? player.seek(command.seconds) : "Workout player is not ready.";
+      case "finish_ride":
+        if (clientRef.current.samples.length === 0) return "No ride samples recorded yet.";
+        return player ? player.finish(command.comments) : "Workout player is not ready.";
+      case "discard_ride":
+        return player ? player.discard() : "Workout player is not ready.";
+    }
+  }
+
+  const bridgeStatusRef = useRef<(() => TrainerBridgeStatus) | null>(null);
+  const executeBridgeCommandRef = useRef(executeBridgeCommand);
+  useEffect(() => {
+    bridgeStatusRef.current = () => ({
+      trainerConnection: connectionState,
+      hrConnection: hrConnectionState,
+      powerW: power ?? null,
+      cadenceRpm: cadence ?? null,
+      heartRateBpm: heartRate ?? null,
+      activeMode: activeTrainerMode,
+      workout: workoutPlayerRef.current?.remote.getStatus() ?? null,
+      sessionSampleCount,
+    });
+    executeBridgeCommandRef.current = executeBridgeCommand;
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let results: TrainerBridgeResult[] = [];
+
+    const sync = async () => {
+      try {
+        const status = bridgeStatusRef.current?.();
+        const res = await fetch("/api/trainer-bridge", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status, results }),
+        });
+        results = [];
+        const data = res.ok ? await res.json() : null;
+        const commands: TrainerBridgeCommand[] = Array.isArray(data?.commands) ? data.commands : [];
+        for (const command of commands) {
+          try {
+            const error = await executeBridgeCommandRef.current(command);
+            results.push({ id: command.id, ok: error === null, message: error ?? undefined });
+          } catch (e) {
+            results.push({ id: command.id, ok: false, message: e instanceof Error ? e.message : String(e) });
+          }
+        }
+      } catch {
+        // Server unreachable; keep polling.
+      }
+      if (!cancelled) timer = setTimeout(sync, results.length > 0 ? 0 : 1000);
+    };
+
+    sync();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, []);
 
   const handleStopSession = async (workoutName: string, riderComments?: string) => {
     const samples = [...clientRef.current.samples];
@@ -937,12 +1026,20 @@ export default function App() {
             {/* ERG Mode Controls */}
             {mode === "erg" && (
               <div className="flex flex-col gap-3 animate-in fade-in slide-in-from-bottom-1">
-                <div className="relative pt-5">
-                  {powerDisplay.nextTarget !== null && (
-                    <span className="pointer-events-none absolute top-0 -translate-x-1/2 whitespace-nowrap rounded bg-background px-1.5 py-0.5 font-mono text-xs font-bold text-primary" style={{ left: `${Math.max(8, Math.min(92, ((powerDisplay.nextTarget - 50) / 950) * 100))}%` }}>
-                      {powerDisplay.nextTarget} W · {powerDisplay.seconds}s
-                      <span className="absolute left-1/2 top-full h-3 w-px bg-primary" />
-                    </span>
+                <div className="flex flex-col gap-2">
+                  {powerDisplay.nextTarget !== null && powerDisplay.seconds !== null && (
+                    <div className="flex flex-col gap-1" aria-label={`Next target ${powerDisplay.nextTarget} W in ${Math.ceil(powerDisplay.seconds)} seconds`}>
+                      <div className="flex justify-between font-mono text-[10px] font-bold text-muted-foreground">
+                        <span>Next {powerDisplay.nextTarget} W</span>
+                        <span>{Math.ceil(powerDisplay.seconds)}s</span>
+                      </div>
+                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                        <div
+                          className={`h-full rounded-full transition-[width] duration-1000 ease-linear ${powerDisplay.nextTarget > (powerDisplay.target ?? targetPower) ? "bg-orange-400" : "bg-blue-300"}`}
+                          style={{ width: `${Math.max(0, Math.min(100, ((10 - powerDisplay.seconds) / 10) * 100))}%` }}
+                        />
+                      </div>
+                    </div>
                   )}
                   <input
                     type="range"

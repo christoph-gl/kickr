@@ -1,91 +1,95 @@
 ---
-iamnotadoctor-skill-version: 8
+iamnotadoctor-skill-version: 9
 name: iamnotadoctor-local-fitness-tracker
-description: Help a rider use iamnotadoctor ride history and in-app LLM summaries for personal fitness tracking. Read rider profile and saved sessions over local HTTP; do not control trainer watts, routes, workouts, or live coaching.
+description: Help a rider use their iamnotadoctor cycling app from an agent - ride history and stats, in-app LLM ride summaries, rider profile and memory, workouts, and trainer control on request. Uses the app's MCP server (or HTTP), locally or on the rider's own domain.
 ---
 
-# iamnotadoctor Fitness Tracking Helper
+# iamnotadoctor Agent Skill
 
-The iamnotadoctor app owns Bluetooth, workouts, live coaching, workout building, and ride-summary LLM calls. Your role is optional and slower: help the rider keep personal fitness records, learn from completed rides, and copy useful ride-summary insights into the rider memory.
+The iamnotadoctor app owns Bluetooth, the workout player, live in-ride coaching, workout building, and ride-summary LLM calls. You help the rider keep fitness records, learn from completed rides, manage their profile and workouts, and change the trainer when they ask.
 
-Do not try to control the trainer. Do not send ERG/resistance/workout commands. Use only the tracking endpoints below.
+## Connection
 
-## Base URL
+The rider chose one of two setups during install (check your memory):
 
-```bash
-BASE_URL="$(portless get iamnotadoctor 2>/dev/null || printf http://localhost:3000)"
-```
+- **Local:** base URL `http://localhost:3000` (or `https://iamnotadoctor.localhost` with Portless). No authentication. Only works if you run on the rider's computer.
+- **Hosted:** base URL `https://<their domain>`. Send `Authorization: Bearer <APP_AUTH_TOKEN>` on every request. Without it the app answers 401.
 
-If the user gives a different local URL, use that. The local iamnotadoctor tracking endpoints do not require authentication.
+Prefer the MCP server at `<base URL>/api/mcp`. Fall back to the HTTP endpoints below if your runtime has no MCP. Never print or log the token.
 
 ## First-Run Onboarding
 
-When first installed for a rider, ask for only the information needed to make fitness tracking useful:
+When first installed for a rider, ask only for what makes tracking useful:
 
 - age
-- broad fitness level and cycling background, for example beginner, returning, recreational, structured training, racer, injury/illness comeback
-- goals and constraints, for example endurance, weight management, FTP gains, low-HR base, time limits, recovery concerns
-- optional: weight, gender, known FTP/4DP/cTHR, and HR-zone preferences if the rider knows them
+- broad fitness level and cycling background (beginner, returning, recreational, structured training, racer, injury/illness comeback)
+- goals and constraints (endurance, weight management, FTP gains, low-HR base, time limits, recovery concerns)
+- optional: weight, gender, known FTP/4DP/cTHR, HR-zone preferences
 
-Then read `GET /api/rider`. Update only fields the API supports:
+Put numeric age in `age`, explicitly given weight/gender/cTHR/4DP in their fields, and qualitative context in `memorySummary`.
 
-- Put numeric `age` into `age`.
-- Put known weight/gender/cTHR/4DP values into their existing fields.
-- Put qualitative fitness level, goals, constraints, and tracking preferences into `memorySummary` with `PATCH /api/rider/memory`.
-- Use `PUT /api/rider` only for explicitly approved profile-field changes.
+## MCP Tools
 
-## Endpoints You Use
+| Area | Tools |
+| --- | --- |
+| Rider | `get_rider_profile`, `update_rider_profile`, `update_rider_memory` |
+| Ride history | `list_rides` (date range, workout name, paging), `get_ride` (full LLM evaluation, optional downsampled samples), `get_ride_stats` (totals, optionally per week or month), `delete_ride` |
+| Rollups | `list_monthly_summaries`, `generate_monthly_summary` |
+| Workouts | `list_workouts`, `get_workout`, `build_workout` (AI draft, not saved), `save_workout`, `delete_workout` |
+| Trainer | `get_trainer_status`, `set_erg_power`, `set_resistance`, `load_workout`, `start_workout`, `pause_workout`, `seek_workout`, `finish_ride`, `discard_ride` |
+
+## HTTP Fallback
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/api/rider` | Rider profile, HR zones, and memory summary. |
-| PUT | `/api/rider` | Update supported rider-approved profile fields. |
-| PATCH | `/api/rider/memory` | Update approved rider memory only. |
-| GET | `/api/sessions` | Saved ride summaries with metrics, rider comments, and in-app LLM summaries. |
-| GET | `/api/sessions/:id` | One full saved ride with raw samples when needed. |
+| GET | `/api/rider` | Rider profile, HR zones, memory summary. |
+| PUT | `/api/rider` | Update approved profile fields (partial patch). |
+| PATCH | `/api/rider/memory` | `{ "memorySummary": "..." }` only. |
+| GET | `/api/sessions` | Saved rides, newest first, with metrics, comments, `llmSummary`; no samples. |
+| GET | `/api/sessions/:id` | One ride with raw samples. |
 | GET | `/api/monthly-summaries` | Monthly rollups when available. |
 
-## Session Fields To Prioritize
+Trainer control is only available over MCP.
 
-`GET /api/sessions` returns rides newest-first without raw samples. Each session may include:
+## Using Ride Data
 
-- `workoutName`
-- `timestamp`
-- `sampleCount`
-- `metrics`: duration, TSS, IF, average power, HR, cadence
-- `riderComments`
-- `llmSummaryStatus`
-- `llmSummary`: headline, summary, key observations, HR-zone assessment, training-load assessment, data-quality notes, suggested next focus, and `memoryCandidate`
+Each saved ride may carry `llmSummary` (headline, summary, key observations, HR-zone and training-load assessment, data-quality notes, suggested next focus, `memoryCandidate`). Use it as the primary narrative source. If `llmSummaryStatus` is `skipped` or `failed`, summarize conservatively from metrics and rider comments. Use `get_ride_stats` for weekly/monthly load questions instead of adding up rides yourself.
 
-Use the app-generated `llmSummary` as the primary narrative source when present. If `llmSummaryStatus` is `skipped` or `failed`, summarize from metrics and rider comments conservatively.
+## Trainer Control
+
+Only when the rider asks, and one command per request:
+
+1. Call `get_trainer_status` first. If `appTabConnected` is false or `trainerConnection` is not `"connected"`, ask the rider to open the app in Chrome or Edge (signing in when hosted) and click **Connect**. You cannot connect Bluetooth.
+2. Then send the command. While a workout plays, `set_erg_power` overrides the target only until the next workout step.
+3. Confirm before `finish_ride`, `discard_ride`, `delete_ride`, or `delete_workout`.
+
+Live in-ride coaching belongs to the app. Do not poll status or send commands in a loop.
 
 ## Slash Commands
 
 Implement these if your environment supports slash commands:
 
-- `/inad_status` - read `/api/rider` and latest sessions; summarize current profile and last ride.
-- `/inad_recent` - summarize the last 3-5 saved rides, emphasizing LLM summaries and trends.
+- `/inad_status` - profile summary, last ride, and trainer status.
+- `/inad_recent` - summarize the last 3-5 rides, emphasizing LLM summaries and trends.
+- `/inad_week` - this week's load via `get_ride_stats`, compared with recent weeks.
 - `/inad_export` - prepare a compact personal fitness tracking entry from recent rides.
 - `/inad_memory_update` - propose a short `memorySummary` update from completed rides; ask before writing it.
 
 ## Memory Update Rules
 
-Only update `memorySummary` after completed rides. Keep it short, rider-facing, and useful for future in-app LLM calls. Good memory notes include stable patterns, goals, constraints, and recent training response. Avoid medical claims and avoid rewriting FTP/HR zones from one ride.
-
-Before writing memory, ask the rider and then use `PATCH /api/rider/memory`. Before `PUT /api/rider`, read the current profile and change only explicitly approved profile fields.
+Only update `memorySummary` after completed rides. Keep it short, rider-facing, and useful for future in-app LLM calls: stable patterns, goals, constraints, recent training response. Avoid medical claims. Ask before writing. Change other profile fields only with explicit approval, and never change FTP, cTHR, or HR zones from one ride.
 
 ## Don't
 
 - Don't send FTMS bytes or talk to Bluetooth directly.
-- Don't queue trainer commands or workout plans.
 - Don't read or write `.data/iamnotadoctor.sqlite`.
-- Don't overwrite rider-entered profile fields without confirmation.
-- Don't treat one ride as enough evidence to change FTP, cTHR, or HR zones.
+- Don't run high-frequency loops against the trainer tools.
+- Don't share, print, or commit the hosted access token.
 
-## If The App Isn't Running
+## If The App Isn't Reachable
 
-`curl $BASE_URL/api/rider` returning a connection error means the iamnotadoctor Next.js app is not up. Point the user at the bootstrap flow:
+- Connection error: the app isn't running (Local) or the server or proxy is down (Hosted). Ask the rider to start it: Local `npm run dev` in the repo folder; Hosted, check the service (`sudo systemctl status iamnotadoctor`).
+- 401 (Hosted): the token is missing or was rotated. Ask the rider for the current `APP_AUTH_TOKEN`.
+- 404 on everything when using a non-localhost address: the app is in Local mode, which only answers on `localhost`.
 
-> Quick setup: `git clone https://github.com/christoph-gl/iamnotadoctor.git && cd iamnotadoctor && npm install && npm run dev`, then open the app in Chrome or Edge and connect the trainer from the UI. See `.agents/skills/iamnotadoctor-local-coach/INSTALL.md` for the full setup path.
-
-Wait for the user to confirm the app is up before retrying.
+Full setup instructions: `.agents/skills/iamnotadoctor-local-coach/INSTALL.md` and `docs/HOSTING.md` in https://github.com/christoph-gl/iamnotadoctor.

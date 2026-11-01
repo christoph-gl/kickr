@@ -1,6 +1,6 @@
 # iamnotadoctor
 
-> Current public-facing version: **0.4**
+> Current public-facing version: **0.5**
 
 It all started in December. I bought a smart bike ergometer (a Wahoo Kickr Core 2, to be precise), excited to get some winter miles in. At first, I was thrilled to find a nice, polished cycling app that seemingly did *not* lock everything behind a subscription model. But alas, three months later, the honeymoon phase ended. It turned out it was just a free trial, and they wanted to charge me €20/month just to control my trainer—which, let's be honest, is pretty basic technology. 
 
@@ -30,6 +30,7 @@ Because it's open-source and AI-friendly, you don't even need to be a developer 
 *   **Hardware Compatibility:** It *should* work with most FTMS-compatible smart trainers/ergometers and standard Bluetooth heart rate monitors. However, I’ve only personally checked and tested it with my own setup: a **Wahoo Kickr Core 2** and an Amazfit pulse watch.
 *   **API Key Setup (Required for LLM features):** To use any of the AI-powered features (like workout screenshot extraction, the natural language workout builder, live coaching feedback, adaptive ride mode, or post-ride analysis), you must supply your own private **OpenRouter API key** in a local `.env.local` file. The core trainer control, structured workout player, and local ZWO file imports work completely offline without any API keys.
 *   **Make it Yours (Zero Dev Effort):** Everyone is free to adapt the app to its will. If you want to change the UI, add features, or adjust how a workout progresses, it's super easy—just tell your AI agent of choice what to do and let it write the code.
+*   **Two Ways to Run It:** **Local** on the computer next to your trainer (the default: no login, nothing exposed), or **Hosted** on your own domain so agents running elsewhere, like a cloud bot, can reach it with an access token. See the comparison in [`docs/HOSTING.md`](./docs/HOSTING.md#choosing-a-setup).
 *   **Agentic Health Stack:** If you want, your AI agent can query most of the data from the app. You can have your agent fill in your vitals, retrieve your workout history, and query it regularly to integrate with your broader personal health stack.
 *   **Dev Server vs. Build Server:**
     *   **Dev Server (`npm run dev`):** This is what you run locally while writing code or letting your agent modify the app. It supports hot-reloading (your changes appear instantly in the browser) and compiles files on the fly, making development fast but the loaded code unoptimized.
@@ -38,19 +39,22 @@ Because it's open-source and AI-friendly, you don't even need to be a developer 
 
 ---
 
-## For Local Agents Given This URL
+## For Agents Given This URL
 
-If an agent is pointed at `https://github.com/christoph-gl/iamnotadoctor` and the user says “try this”, “implement it”, “first”, or similar, treat that as a request to **bootstrap the iamnotadoctor app locally and optionally install the fitness-tracking helper skill**. Do not ask “implement what?” unless the user explicitly asks for a code feature.
+If an agent is pointed at `https://github.com/christoph-gl/iamnotadoctor` and the user says “try this”, “set it up”, “implement it”, “first”, or similar, treat that as a request to **set up iamnotadoctor for the user**. Do not ask “implement what?” unless the user explicitly asks for a code feature. Follow [`.agents/skills/iamnotadoctor-local-coach/INSTALL.md`](./.agents/skills/iamnotadoctor-local-coach/INSTALL.md); in short:
 
-Fresh-agent default path:
+1. **Explain the two setups and let the user choose** before installing anything. Recommend **Local** unless the agent runs on a different machine than the trainer, or the user wants ride history reachable while their riding computer is off.
 
-1. Clone the repo to a user-approved directory, or use the directory the user already has.
-2. Run `npm install`.
-3. Do **not** copy `.env.example` to `.env.local`. It contains optional placeholders. Create `.env.local` only when the user provides real LLM or image-extraction credentials.
-4. Start with `npm run dev` or `npm run dev:portless`; the script already includes Turbopack.
-5. Wait for the first Next.js compile. It can take 30-90 seconds on a fresh install. Probe `http://localhost:3000/api/rider`, not only `/`.
-6. Tell the user to open Chrome or Edge and connect Bluetooth from the UI. Agents cannot grant Web Bluetooth permission.
-7. If setting up an external agent, follow [`.agents/skills/iamnotadoctor-local-coach/INSTALL.md`](./.agents/skills/iamnotadoctor-local-coach/INSTALL.md). The agent should ask the rider for age, broad fitness level, goals, and constraints, then use completed rides and in-app LLM summaries for personal fitness tracking.
+   | | Local (default) | Hosted on your own domain |
+   | --- | --- | --- |
+   | Runs on | The computer next to the trainer | An always-on server you control |
+   | Pros | Zero config, no login, nothing exposed to the internet, data stays on your computer | Any agent can connect, including cloud bots; ride history available any time; stable `https://` address |
+   | Cons | Only agents on that same computer can use it; only while the app is running | Needs a domain, HTTPS proxy and background service; riding depends on internet and the server; one token guards rides and trainer control |
+
+2. **Local:** clone, `npm install`, `npm run dev`, probe `http://localhost:3000/api/rider` (first compile can take 30-90 s). **Hosted:** follow [`docs/HOSTING.md`](./docs/HOSTING.md) on the server (`APP_AUTH_TOKEN` in `.env.local`, build, service, HTTPS), then probe `https://<domain>/api/rider` with `Authorization: Bearer <token>`.
+3. Do **not** copy `.env.example` to `.env.local`; create it only with real values (LLM keys, and `APP_AUTH_TOKEN` for hosted).
+4. Tell the user to open the app in Chrome or Edge on the device next to the trainer (signing in with the token when hosted) and click **Connect**. Agents cannot grant Web Bluetooth permission.
+5. If the user wants their agent to use the app, connect it to the MCP server (`/api/mcp`, see [MCP Server](#mcp-server)) or install the portable skill, then ask the rider for age, broad fitness level, goals, and constraints.
 
 ## Features
 
@@ -76,6 +80,8 @@ Fresh-agent default path:
 - **SQLite-backed Rider Context:** Store FTP/4DP, HR zones, age, weight, gender, and an LLM-ready rider memory summary in `.data/iamnotadoctor.sqlite`.
 
 ## Getting Started
+
+These steps are the **local** setup. To run the app on your own domain instead, follow [`docs/HOSTING.md`](./docs/HOSTING.md).
 
 1. Install dependencies:
    ```bash
@@ -252,7 +258,47 @@ Prompt guardrails:
 
 The browser remains the Bluetooth owner, and the app now owns all live LLM behavior: workout building, in-ride feedback, post-ride summaries, and trainer execution. External agents are optional helpers for slower personal tracking workflows after rides.
 
-Fresh agents should not control watts, routes, workouts, or live coaching. The supported external-agent surface is profile and completed-ride tracking only.
+Agents can reach the app in two ways: the MCP server (recommended), or the plain HTTP endpoints below.
+
+### MCP Server
+
+The app serves an MCP server (Streamable HTTP) at `/api/mcp`.
+
+**Local setup** (agent on the same computer, app running): no authentication.
+
+```json
+{
+  "mcpServers": {
+    "iamnotadoctor": { "url": "http://localhost:3000/api/mcp" }
+  }
+}
+```
+
+For Claude Code: `claude mcp add --transport http iamnotadoctor http://localhost:3000/api/mcp`. Stdio-only clients can use `npx -y mcp-remote http://localhost:3000/api/mcp`.
+
+**Hosted setup** ([`docs/HOSTING.md`](./docs/HOSTING.md)): use your domain and send the access token.
+
+```json
+{
+  "mcpServers": {
+    "iamnotadoctor": {
+      "url": "https://kickr.example.com/api/mcp",
+      "headers": { "Authorization": "Bearer <APP_AUTH_TOKEN>" }
+    }
+  }
+}
+```
+
+It exposes:
+
+- **Rider profile:** read the profile, update fields, update `memorySummary`.
+- **Ride history:** list and filter past rides by date or workout name, open one ride with its LLM evaluation and optional downsampled telemetry, aggregate stats (hours, TSS, IF, power, HR) overall or per week or month, delete a ride, and list or generate monthly summaries.
+- **Workouts:** list, inspect, AI-build, save and delete library workouts.
+- **Trainer control:** status, set ERG watts, set resistance, load a workout, start, pause or seek it, finish and save the ride, or discard it.
+
+Trainer tools only work while the app is open in a browser tab with the trainer connected. The tab owns Bluetooth: it polls the server about once a second, runs queued commands, and reports back. Agents cannot connect Bluetooth devices; the rider clicks **Connect** in the app.
+
+### HTTP Endpoints
 
 Agents should read rider context and completed rides:
 
@@ -260,6 +306,9 @@ Agents should read rider context and completed rides:
 BASE_URL="$(portless get iamnotadoctor 2>/dev/null || printf http://localhost:3000)"
 curl "$BASE_URL/api/rider"
 curl "$BASE_URL/api/sessions"
+
+# Hosted setup: add the access token
+curl -H "Authorization: Bearer $APP_AUTH_TOKEN" https://kickr.example.com/api/sessions
 ```
 
 On first install, the agent should ask the rider for age, broad fitness level, cycling background, goals, and constraints. It can store numeric age and other explicitly approved profile fields through `PUT /api/rider`, and qualitative fitness context in `memorySummary` through `PATCH /api/rider/memory`.
@@ -288,7 +337,7 @@ Use the cog button in the top right of the app to edit these values manually.
 
 The browser owns Bluetooth. Time-sensitive in-ride feedback uses the app-owned `POST /api/coach/live` endpoint, which calls the configured OpenRouter-compatible model directly. For preplanned workouts, the active UI uses this route only for rider-facing text: one ride-start summary and five-minute feedback checks. The workout timeline remains the source of truth for ERG targets.
 
-External agents remain useful for personal fitness tracking: onboarding the rider profile, summarizing saved rides, exporting ride results into another tracking system, and proposing concise `memorySummary` updates from completed rides. They operate through local HTTP and never speak FTMS or talk to the trainer directly.
+External agents remain useful for personal fitness tracking: onboarding the rider profile, summarizing saved rides, exporting ride results into another tracking system, and proposing concise `memorySummary` updates from completed rides. They use MCP or HTTP (locally, or on your own domain with the access token) and never speak FTMS or talk to the trainer directly.
 
 Use:
 
@@ -297,7 +346,7 @@ Use:
 - `GET /api/sessions/:id` for one full ride with raw samples
 - `GET /api/monthly-summaries` when available
 
-Do not use external agents for live trainer control, route control, or in-ride workout adaptation. Those decisions now belong to the app's in-process LLM lanes and workout player.
+Live in-ride coaching belongs to the app's in-process LLM lanes and workout player. When the rider asks their agent to change the trainer, the agent uses the MCP trainer tools, which go through the open app tab rather than talking to the trainer directly.
 
 ### Install-once skill model
 
@@ -320,7 +369,7 @@ What lives where:
 
 `dist/agent-skill.md` starts with a `iamnotadoctor-skill-version` line. Bump it whenever the operating contract changes; installed copies use it to detect drift and re-install.
 
-Workflow: agent points at repo once → reads [`INSTALL.md`](./.agents/skills/iamnotadoctor-local-coach/INSTALL.md) → if the iamnotadoctor app isn't running yet, walks the user through Step 0 (clone, `npm install`, optional `.env.local`, `npm run dev`) → copies `dist/agent-skill.md` into its own skills dir → asks for age and fitness context → uses ride summaries for tracking → never opens this repo again until version bumps.
+Workflow: agent points at repo once → reads [`INSTALL.md`](./.agents/skills/iamnotadoctor-local-coach/INSTALL.md) → explains the local and hosted setups and lets the user choose → sets up the chosen path (Step 0) → connects to the MCP server and/or copies `dist/agent-skill.md` into its own skills dir → asks for age and fitness context → uses ride summaries for tracking → never opens this repo again until version bumps.
 
 ## Further Development
 See `AGENTS.md` for guidelines and instructions for LLMs working on this project in the future.

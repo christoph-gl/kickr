@@ -1,14 +1,24 @@
 # iamnotadoctor App API Reference
 
-Preferred base URL is `https://iamnotadoctor.localhost` when Portless is running:
+**Local setup:** preferred base URL is `https://iamnotadoctor.localhost` when Portless is running, otherwise `http://localhost:3000`. No authentication.
 
 ```bash
 BASE_URL="$(portless get iamnotadoctor 2>/dev/null || printf http://localhost:3000)"
+AUTH=()
 ```
+
+**Hosted setup:** the rider's own domain. Every request needs the access token; without it the app answers 401.
+
+```bash
+BASE_URL="https://kickr.example.com"
+AUTH=(-H "Authorization: Bearer $APP_AUTH_TOKEN")
+```
+
+The same operations, plus trainer control and ride statistics, are available as MCP tools at `$BASE_URL/api/mcp`. Prefer MCP when your runtime supports it.
 
 ## Current Agent Contract
 
-The iamnotadoctor app now handles live coaching, workout building, ride summaries, and trainer control internally. External agents should focus on personal fitness tracking after rides.
+The iamnotadoctor app handles live coaching, workout building, ride summaries, and Bluetooth internally. Over HTTP, agents focus on personal fitness tracking after rides.
 
 Use these endpoints:
 
@@ -22,16 +32,14 @@ GET /api/sessions/:id
 GET /api/monthly-summaries
 ```
 
-Fresh agents should not try to control watts, routes, workouts, or live coaching.
+Trainer control is only available through the MCP trainer tools, and only when the rider asks.
 
 ## First Smoke Test
 
 ```bash
-curl -sf "$BASE_URL/api/rider"
-curl -sf "$BASE_URL/api/sessions"
+curl -sf "${AUTH[@]}" "$BASE_URL/api/rider"
+curl -sf "${AUTH[@]}" "$BASE_URL/api/sessions"
 ```
-
-These local endpoints do not require authentication.
 
 ## Rider Context
 
